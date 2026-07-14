@@ -22,7 +22,7 @@ class LandmarkParserTest {
         hasLandmark.init(new EncodedValue.InitializerConfig());
         parser = new LandmarkParser(hasLandmark);
 
-        landmarkName = new StringEncodedValue("landmark_name", 50, false);
+        landmarkName = new StringEncodedValue("landmark_name", 50_000, false);
         landmarkName.init(new EncodedValue.InitializerConfig());
         parserWithName = new LandmarkParser(hasLandmark, landmarkName);
     }

@@ -16,6 +16,8 @@ const config = {
             'road_environment',
             'max_speed',
             'average_speed',
+            'has_landmark',
+            'landmark_name',
         ],
         snapPreventions: ['ferry'],
     },
