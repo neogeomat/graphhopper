@@ -343,6 +343,17 @@ public class DefaultImportRegistry implements ImportRegistry {
                     (lookup, props) -> new OSMLitParser(
                             lookup.getBooleanEncodedValue(Lit.KEY))
             );
+        else if (HasLandmark.KEY.equals(name))
+            return ImportUnit.create(name, props -> HasLandmark.create(),
+                    (lookup, props) -> {
+                        StringEncodedValue landmarkName = lookup.hasEncodedValue(LandmarkName.KEY)
+                                ? lookup.getStringEncodedValue(LandmarkName.KEY) : null;
+                        return new LandmarkParser(
+                                lookup.getBooleanEncodedValue(HasLandmark.KEY), landmarkName);
+                    }
+            );
+        else if (LandmarkName.KEY.equals(name))
+            return ImportUnit.create(name, props -> LandmarkName.create(), null);
         return null;
     }
 }

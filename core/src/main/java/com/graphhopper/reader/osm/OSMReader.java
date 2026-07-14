@@ -36,6 +36,7 @@ import com.graphhopper.routing.util.AreaIndex;
 import com.graphhopper.routing.util.CustomArea;
 import com.graphhopper.routing.util.FerrySpeedCalculator;
 import com.graphhopper.routing.util.OSMParsers;
+import com.graphhopper.routing.util.parsers.LandmarkNodeIndex;
 import com.graphhopper.routing.util.parsers.RestrictionSetter;
 import com.graphhopper.search.KVStorage;
 import com.graphhopper.storage.BaseGraph;
@@ -85,6 +86,7 @@ public class OSMReader {
     private final RestrictionSetter restrictionSetter;
     private ElevationProvider eleProvider = ElevationProvider.NOOP;
     private AreaIndex<CustomArea> areaIndex;
+    private LandmarkNodeIndex landmarkIndex;
     private File osmFile;
     private final RamerDouglasPeucker simplifyAlgo = new RamerDouglasPeucker();
     private int bugCounter = 0;
@@ -154,6 +156,7 @@ public class OSMReader {
         if (!baseGraph.isInitialized())
             throw new IllegalStateException("BaseGraph must be initialize before we can read OSM");
 
+        landmarkIndex = new LandmarkNodeIndex(100);
         WaySegmentParser waySegmentParser = new WaySegmentParser.Builder(baseGraph.getNodeAccess(), baseGraph.getDirectory())
                 .setWayFilter(this::acceptWay)
                 .setSplitNodeFilter(this::isBarrierNode)
@@ -161,6 +164,7 @@ public class OSMReader {
                 .setRelationPreprocessor(this::preprocessRelations)
                 .setRelationProcessor(this::processRelation)
                 .setEdgeHandler(this::addEdge)
+                .setLandmarkNodeConsumer(this::collectLandmarkNode)
                 .setWorkerThreads(config.getWorkerThreads())
                 .build();
         waySegmentParser.readOSM(osmFile);
@@ -210,6 +214,15 @@ public class OSMReader {
         return node.hasTag("barrier") || node.hasTag("ford");
     }
 
+    private void collectLandmarkNode(ReaderNode node) {
+        for (String key : LandmarkNodeIndex.LANDMARK_KEYS) {
+            if (node.hasTag(key)) {
+                landmarkIndex.add(node.getLat(), node.getLon(), node.getTags());
+                return;
+            }
+        }
+    }
+
     /**
      * @return true if the length of the way shall be calculated and added as an artificial way tag
      */
@@ -236,6 +249,7 @@ public class OSMReader {
         way.removeTag("country");
         way.removeTag("country_rule");
         way.removeTag("custom_areas");
+        way.removeTag("nearby_landmarks");
 
         List<CustomArea> customAreas;
         if (areaIndex != null) {
@@ -289,6 +303,25 @@ public class OSMReader {
 
         // also add all custom areas as artificial tag
         way.setTag("custom_areas", customAreas);
+
+        if (landmarkIndex != null) {
+            double queryLat, queryLon;
+            if (pointList.size() > 2) {
+                queryLat = pointList.getLat(pointList.size() / 2);
+                queryLon = pointList.getLon(pointList.size() / 2);
+            } else {
+                queryLat = (pointList.getLat(0) + pointList.getLat(pointList.size() - 1)) / 2;
+                queryLon = (pointList.getLon(0) + pointList.getLon(pointList.size() - 1)) / 2;
+            }
+            List<LandmarkNodeIndex.LandmarkNode> nearby = landmarkIndex.query(queryLat, queryLon, 100);
+            if (!nearby.isEmpty()) {
+                List<Map<String, Object>> nearbyList = new ArrayList<>(nearby.size());
+                for (LandmarkNodeIndex.LandmarkNode n : nearby) {
+                    nearbyList.add(n.getTags());
+                }
+                way.setTag("nearby_landmarks", nearbyList);
+            }
+        }
     }
 
     /**

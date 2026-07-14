@@ -60,7 +60,8 @@ import static com.graphhopper.util.Helper.nf;
  */
 public class WaySegmentParser {
     private static final Logger LOGGER = LoggerFactory.getLogger(WaySegmentParser.class);
-    private static final Set<String> INCLUDE_IF_NODE_TAGS = new HashSet<>(Arrays.asList("barrier", "highway", "railway", "crossing", "ford"));
+    private static final Set<String> INCLUDE_IF_NODE_TAGS = new HashSet<>(Arrays.asList("barrier", "highway", "railway", "crossing", "ford",
+            "amenity", "tourism", "historic", "leisure", "shop", "public_transport", "natural", "man_made", "landmark", "is_landmark"));
 
     private Predicate<ReaderWay> wayFilter = way -> true;
     private Predicate<ReaderNode> splitNodeFilter = node -> false;
@@ -72,6 +73,7 @@ public class WaySegmentParser {
     };
     private EdgeHandler edgeHandler = (from, to, pointList, way, nodeTags) ->
             System.out.println("edge " + from + "->" + to + " (" + pointList.size() + " points)");
+    private Consumer<ReaderNode> landmarkNodeConsumer = node -> {};
     private int workerThreads = 2;
 
     private final OSMNodeData nodeData;
@@ -204,8 +206,15 @@ public class WaySegmentParser {
                         ", " + Helper.getMemInfo());
 
             long nodeType = nodeData.addCoordinatesIfMapped(node.getId(), node.getLat(), node.getLon());
-            if (nodeType == EMPTY_NODE)
+            if (nodeType == EMPTY_NODE) {
+                for (Map.Entry<String, Object> e : node.getTags().entrySet()) {
+                    if (INCLUDE_IF_NODE_TAGS.contains(e.getKey())) {
+                        landmarkNodeConsumer.accept(node);
+                        break;
+                    }
+                }
                 return;
+            }
 
             acceptedNodes++;
 
@@ -471,6 +480,15 @@ public class WaySegmentParser {
          */
         public Builder setEdgeHandler(EdgeHandler edgeHandler) {
             waySegmentParser.edgeHandler = edgeHandler;
+            return this;
+        }
+
+        /**
+         * @param landmarkNodeConsumer called for every OSM node with landmark-related tags,
+         *                             even if the node is not on any accepted way
+         */
+        public Builder setLandmarkNodeConsumer(Consumer<ReaderNode> landmarkNodeConsumer) {
+            waySegmentParser.landmarkNodeConsumer = landmarkNodeConsumer;
             return this;
         }
 
