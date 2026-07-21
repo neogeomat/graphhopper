@@ -2,9 +2,11 @@
 
 ## Get Started
 ```bash
-java -Ddw.graphhopper.datareader.file=ktm.osm.pbf -jar web/target/graphhopper-web-*.jar server config-example.yml
+java -Ddw.graphhopper.datareader.file=ktm.osm.pbf -jar web/target/graphhopper-web-*.jar server config.yml
 ```
 Web UI: http://localhost:8989
+Tested Route API: 
+add &details=landmark_name
 
 ## Building
 ```bash

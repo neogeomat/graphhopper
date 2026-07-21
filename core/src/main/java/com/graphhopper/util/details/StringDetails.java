@@ -38,8 +38,7 @@ public class StringDetails extends AbstractPathDetailsBuilder {
     @Override
     public boolean isEdgeDifferentToLastEdge(EdgeIteratorState edge) {
         String val = edge.get(ev);
-        // we can use the reference equality here
-        if (!val.equals(currentVal)) {
+        if (currentVal == null || !currentVal.equals(val)) {
             this.currentVal = val;
             return true;
         }

@@ -47,6 +47,8 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
     private final EnumEncodedValue<RoadEnvironment> roadEnvEnc;
     private final IntEncodedValue lanesEnc;
     private final DecimalEncodedValue maxSpeedEnc;
+    private final BooleanEncodedValue hasLandmarkEnc;
+    private final StringEncodedValue landmarkNameEnc;
 
     /**
      * True when the current instruction started on an unnamed link road and we want to
@@ -100,6 +102,8 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
         this.roadClassLinkEnc = evLookup.getBooleanEncodedValue(RoadClassLink.KEY);
         this.maxSpeedEnc = evLookup.getDecimalEncodedValue(MaxSpeed.KEY);
         this.lanesEnc = evLookup.hasEncodedValue(Lanes.KEY) ? evLookup.getIntEncodedValue(Lanes.KEY) : null;
+        this.hasLandmarkEnc = evLookup.hasEncodedValue(HasLandmark.KEY) ? evLookup.getBooleanEncodedValue(HasLandmark.KEY) : null;
+        this.landmarkNameEnc = evLookup.hasEncodedValue(LandmarkName.KEY) ? evLookup.getStringEncodedValue(LandmarkName.KEY) : null;
         this.nodeAccess = graph.getNodeAccess();
         this.ways = ways;
         prevNode = -1;
@@ -162,6 +166,8 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
         final String destinationRef = (String) edge.getValue(STREET_DESTINATION_REF);
         final String motorwayJunction = (String) edge.getValue(MOTORWAY_JUNCTION);
         final RoadEnvironment roadEnv = edge.get(roadEnvEnc);
+        final String landmarkName = hasLandmarkEnc != null && edge.get(hasLandmarkEnc) && landmarkNameEnc != null
+                ? edge.get(landmarkNameEnc) : null;
 
         if ((prevInstruction == null) && (!isRoundabout)) // very first instruction (if not in Roundabout)
         {
@@ -172,6 +178,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
             prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
             prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
             prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
+            prevInstruction.setExtraInfo("landmark_name", landmarkName);
 
             double startLat = nodeAccess.getLat(baseNode);
             double startLon = nodeAccess.getLon(baseNode);
@@ -246,6 +253,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
             prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
             prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
             prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
+            prevInstruction.setExtraInfo("landmark_name", landmarkName);
 
             // calc angle between roundabout entrance and exit
             double orientation = AngleCalc.ANGLE_CALC.calcOrientation(prevLat, prevLon, latitude, longitude);
@@ -344,6 +352,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
                 prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
                 prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
                 prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
+                prevInstruction.setExtraInfo("landmark_name", landmarkName);
             }
             // Update the prevName, since we don't always create an instruction on name changes the previous
             // name can be an old name. This leads to incorrect turn instructions due to name changes

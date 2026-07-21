@@ -44,16 +44,17 @@ This fork adds a `has_landmark` boolean encoded value that flags edges with near
 | File | Role |
 |------|------|
 | `.../ev/HasLandmark.java` | Boolean encoded value, key `"has_landmark"` |
-| `.../ev/LandmarkName.java` | String encoded value, key `"landmark_name"` (512 chars max) |
+| `.../ev/LandmarkName.java` | String encoded value, key `"landmark_name"` (`1_000_000` unique values cap) |
 | `.../parsers/LandmarkParser.java` | TagParser that sets both encoded values |
 | `.../parsers/LandmarkNodeIndex.java` | Grid-based spatial index with radius query |
-| `.../osm/OSMReader.java` | Wires collection + query (search radius hardcoded at 100m, line 160) |
+| `.../osm/OSMReader.java` | Wires collection + query (search radius hardcoded at 100m, lines 159, 316) |
 | `.../osm/WaySegmentParser.java` | Has `landmarkNodeConsumer` + builder method |
 | `.../ev/DefaultImportRegistry.java` | Registers the import unit |
 
 ### Activation
 
-Add to config (note: YAML multiline string `|`, add to the existing list):
+This fork's `config.yml` already includes `has_landmark, landmark_name` first in `graph.encoded_values:`. To add to a fresh config:
+
 ```yaml
 graph.encoded_values: |
   has_landmark, landmark_name, car_access, car_average_speed, country, road_class, roundabout, max_speed, road_environment,
@@ -61,7 +62,9 @@ graph.encoded_values: |
   bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network, mtb_rating, ferry_speed
 ```
 
-The `INCLUDE_IF_NODE_TAGS` set in `WaySegmentParser.java:63` controls which node keys survive OSM import. Landmark keys were added alongside `barrier`, `highway`, `railway`, etc.
+Note: `landmark_name` has no parser of its own — it is registered via `has_landmark`'s `ImportUnit` in `DefaultImportRegistry.java:346-354`. It is an output-only `StringEncodedValue` set by `LandmarkParser`.
+
+The `INCLUDE_IF_NODE_TAGS` set in `WaySegmentParser.java:63-64` controls which node keys survive OSM import. Landmark keys were added alongside `barrier`, `highway`, `railway`, etc.
 
 ### Verification & usage
 
@@ -82,7 +85,7 @@ The `INCLUDE_IF_NODE_TAGS` set in `WaySegmentParser.java:63` controls which node
 ### To extend
 
 - **Add more OSM keys**: edit `LandmarkNodeIndex.LANDMARK_KEYS`
-- **Change search radius**: edit `new LandmarkNodeIndex(100)` in OSMReader.java line 160
+- **Change search radius**: edit `new LandmarkNodeIndex(100)` in OSMReader.java line 159
 - **Store more detail**: replace `boolean` with `StringEncodedValue` in `HasLandmark.java`
 
 ## Architecture notes
@@ -92,3 +95,6 @@ The `INCLUDE_IF_NODE_TAGS` set in `WaySegmentParser.java:63` controls which node
 - New `TagParser` + `EncodedValue` + `DefaultImportRegistry` entry = standard extension pattern.
 - Test data files are in `core/files/` (small OSM extracts like `andorra.osm.pbf`, `monaco.osm.gz`).
 - `config-example.yml` documents all profile, CH, LM, elevation settings.
+- Java 25 compile target; CI matrix tests on Java 26 and 27-ea (`build.yml`).
+- Checkstyle enforces 500-char lines; `.editorconfig` says 100 (IDE formatting, not enforced by CI).
+- `config.yml` is gitignored but committed in this fork; `graph-cache/` is gitignored.
