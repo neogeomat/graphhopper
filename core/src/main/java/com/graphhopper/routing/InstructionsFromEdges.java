@@ -178,7 +178,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
             prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
             prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
             prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
-            prevInstruction.setExtraInfo("landmark_name", landmarkName);
+            prevInstruction.setExtraInfo(LANDMARK_NAME, landmarkName);
 
             double startLat = nodeAccess.getLat(baseNode);
             double startLon = nodeAccess.getLon(baseNode);
@@ -253,7 +253,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
             prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
             prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
             prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
-            prevInstruction.setExtraInfo("landmark_name", landmarkName);
+            prevInstruction.setExtraInfo(LANDMARK_NAME, landmarkName);
 
             // calc angle between roundabout entrance and exit
             double orientation = AngleCalc.ANGLE_CALC.calcOrientation(prevLat, prevLon, latitude, longitude);
@@ -352,7 +352,7 @@ public class InstructionsFromEdges implements Path.EdgeVisitor {
                 prevInstruction.setExtraInfo(STREET_DESTINATION_REF, destinationRef);
                 prevInstruction.setExtraInfo(MOTORWAY_JUNCTION, motorwayJunction);
                 prevInstruction.setExtraInfo("ferry", InstructionsHelper.createFerryInfo(roadEnv, prevRoadEnv));
-                prevInstruction.setExtraInfo("landmark_name", landmarkName);
+                prevInstruction.setExtraInfo(LANDMARK_NAME, landmarkName);
             }
             // Update the prevName, since we don't always create an instruction on name changes the previous
             // name can be an old name. This leads to incorrect turn instructions due to name changes

@@ -15,6 +15,7 @@ u_turn=make a U-turn
 toward_destination=%1$s and drive toward %2$s
 toward_destination_ref_only=%1$s toward %2$s
 toward_destination_with_ref=%1$s and take %2$s toward %3$s
+near_landmark=%1$s near %2$s
 unknown=unknown instruction sign '%1$s'
 via=via
 hour_abbr=h

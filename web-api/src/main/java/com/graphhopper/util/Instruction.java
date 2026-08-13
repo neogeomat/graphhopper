@@ -235,12 +235,20 @@ public class Instruction {
         String dest = (String) extraInfo.get(STREET_DESTINATION);
         String destRef = (String) extraInfo.get(STREET_DESTINATION_REF);
 
+        String result;
         if (dest != null) {
             if (destRef != null)
-                return tr.tr("toward_destination_with_ref", str, destRef, dest);
-            return tr.tr("toward_destination", str, dest);
+                result = tr.tr("toward_destination_with_ref", str, destRef, dest);
+            else
+                result = tr.tr("toward_destination", str, dest);
         } else if (destRef != null)
-            return tr.tr("toward_destination_ref_only", str, destRef);
-        return str;
+            result = tr.tr("toward_destination_ref_only", str, destRef);
+        else
+            result = str;
+
+        String landmarkName = (String) extraInfo.get(LANDMARK_NAME);
+        if (!Helper.isEmpty(landmarkName))
+            result = tr.tr("near_landmark", result, landmarkName);
+        return result;
     }
 }
