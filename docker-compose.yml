@@ -1,0 +1,19 @@
+services:
+  graphhopper:
+    build: .
+    image: graphhopper-landmark:latest
+    container_name: graphhopper-landmark
+    ports:
+      - "8989:8989"   # /route API + /maps UI
+      - "8990:8990"   # Dropwizard admin (/healthcheck, metrics)
+    volumes:
+      # Persisted imported graph — survives container rebuilds, no re-import.
+      - ./graph-cache:/data/graph-cache
+      # OSM input (read-only); only used on first import when graph-cache is empty.
+      - ./Nepal_data.v07172026.osm.pbf:/data/Nepal_data.v07172026.osm.pbf:ro
+    environment:
+      JAVA_OPTS: "-Xmx4g -Xms512m"
+      # Optional overrides (defaults are baked into the Dockerfile ENV):
+      # DATAREADER_FILE: /data/Nepal_data.v07172026.osm.pbf
+      # GRAPH_LOCATION: /data/graph-cache
+    restart: unless-stopped

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — GraphHopper 3D</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+  #map { position: absolute; inset: 0; background: #14161a; }
+
+  /* ---- panels ---- */
+  .panel {
+    position: absolute; top: 10px; width: 310px; max-height: calc(100% - 80px);
+    display: flex; flex-direction: column; background: #fff; border-radius: 8px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.35); z-index: 5; overflow: hidden;
+  }
+  #panel-routing   { right: 10px; }
+  #panel-incidents { left: 10px; width: 290px; }
+  .panel.hidden .panel-body { display: none; }
+  .panel-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; background: #2d3436; color: #fff; cursor: pointer; user-select: none;
+  }
+  #panel-incidents .panel-head { background: #632626; }
+  .panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; }
+  .panel-head .count { background:#d63031; color:#fff; border-radius: 10px; padding: 1px 8px; font-size: 12px; }
+  .panel-head .chev { font-size: 12px; opacity: .85; }
+  .panel-body { overflow-y: auto; padding: 10px 12px; }
+
+  label { display: block; font-size: 12px; color: #555; margin: 8px 0 3px; }
+  input[type=text], input[type=number], select {
+    width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+  }
+  button { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
+  button:hover { background: #f2f2f2; }
+  button.primary { background: #0984e3; color: #fff; border-color: #0984e3; width: 100%; margin-top: 10px; }
+  button.wide { width: 100%; margin-top: 6px; }
+  .mode-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .mode-row button { flex: 1; }
+  .mode-row button.active { background: #0984e3; color: #fff; border-color: #0984e3; }
+
+  /* waypoint list */
+  .wp { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .wp-badge {
+    width: 22px; height: 22px; flex: none; border-radius: 50%; color: #fff;
+    font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  .wp-badge.origin { background: #0984e3; }
+  .wp-badge.dest   { background: #d63031; }
+  .wp-badge.stop   { background: #6c5ce7; }
+  .wp input { flex: 1; padding: 5px 7px; font-size: 12px; }
+  .wp button { padding: 3px 7px; font-size: 11px; color: #d63031; border-color: #ddd; }
+  #waypoints .empty { padding: 8px 2px; color: #888; font-size: 12px; text-align: left; }
+
+  /* right-click context menu */
+  #ctxmenu {
+    position: absolute; z-index: 25; display: none; min-width: 178px; padding: 4px;
+    background: #fff; border-radius: 6px; box-shadow: 0 3px 16px rgba(0,0,0,.32);
+  }
+  #ctxmenu.open { display: block; }
+  #ctxmenu button {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    padding: 7px 10px; font-size: 12px; border-radius: 4px; color: #2d3436;
+  }
+  #ctxmenu button:hover { background: #f0f4f8; }
+  #ctxmenu .ctx-sep { height: 1px; background: #eee; margin: 4px 2px; }
+  #ctxmenu .ctx-danger { color: #d63031; }
+  .check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: #333; }
+  .check input { width: auto; }
+  .hint { font-size: 11px; color: #888; background: #fafafa; border: 1px solid #eee; border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; }
+  #error { display: none; color: #d63031; font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+  .sep { border-top: 1px solid #eee; margin: 12px 0 4px; }
+  .sec { font-size: 11px; font-weight: 700; color: #2d3436; text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 4px; }
+  .row2 { display: flex; gap: 6px; }
+  .row2 > * { flex: 1; }
+  .rng { display: flex; align-items: center; gap: 8px; }
+  .rng input[type=range] { flex: 1; }
+  .rng span { font-size: 11px; color: #666; min-width: 30px; text-align: right; }
+
+  .baselist label { display: flex; align-items: center; gap: 7px; margin: 0; padding: 5px 2px; font-size: 12px; color: #333; cursor: pointer; }
+  .baselist input { width: auto; }
+
+  .ov { border: 1px solid #eee; border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; }
+  .ov .top { display: flex; align-items: center; gap: 6px; }
+  .ov .nm { font-size: 12px; font-weight: 600; flex: 1; word-break: break-all; }
+  .ov .kind { font-size: 10px; color: #888; background: #f1f2f6; border-radius: 3px; padding: 1px 5px; }
+  .ov .sv { font-size: 9px; border-radius: 3px; padding: 1px 5px; font-weight: 700; letter-spacing: .03em; }
+  .ov .sv.saved { color: #0a7a48; background: #e6f7ee; }
+  .ov .sv.session { color: #b34700; background: #fff5e6; }
+  .ov .acts { display: flex; gap: 5px; margin-top: 5px; }
+  .ov button { font-size: 10px; padding: 2px 6px; }
+  .ov button.danger { color: #d63031; border-color: #d63031; }
+
+  .incident { padding: 9px 2px; border-bottom: 1px solid #eee; }
+  .incident .row { display: flex; align-items: center; gap: 8px; }
+  .incident .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .incident .type { font-weight: 600; font-size: 12px; }
+  .incident .active-badge { font-size: 10px; color: #d63031; font-weight: 700; }
+  .incident .active-badge.inactive { color: #636e72; }
+  .incident .desc { font-size: 12px; color: #555; margin: 4px 0; word-break: break-word; }
+  .incident .actions { display: flex; gap: 5px; margin-top: 5px; }
+  .incident button.danger { color: #d63031; border-color: #d63031; }
+  .empty { padding: 18px 4px; text-align: center; color: #888; font-size: 12px; }
+
+  /* route summary lives inside the routing panel */
+  #result { display: none; margin: 10px -12px 0; border-top: 1px solid #eee; }
+  #summary { padding: 9px 12px; font-weight: 600; font-size: 13px; background: #f0f4f8; }
+  #result.busy { opacity: .55; transition: opacity .12s; }
+
+  .marker-origin, .marker-dest, .marker-stop {
+    width: 24px; height: 24px; border-radius: 50%; color: #fff; text-align: center;
+    line-height: 24px; font-weight: 700; font-size: 12px; cursor: grab;
+    box-shadow: 0 1px 4px rgba(0,0,0,.5); border: 2px solid #fff;
+  }
+  .marker-origin { background: #0984e3; }
+  .marker-dest { background: #d63031; }
+  .marker-stop { background: #6c5ce7; }
+
+  #drawbar {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    background: #2d3436; color: #fff; border-radius: 6px; padding: 8px 12px; z-index: 6;
+    display: none; align-items: center; gap: 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  }
+  #drawbar.open { display: flex; }
+  #drawbar b { font-weight: 600; }
+  #drawbar button { font-size: 11px; }
+
+  #modal { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: none; align-items: center; justify-content: center; }
+  #modal.open { display: flex; }
+
+  /* alert box (route failures) */
+  #alertbox { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 30; display: none; align-items: center; justify-content: center; }
+  #alertbox.open { display: flex; }
+  #alert-card {
+    background: #fff; border-radius: 8px; padding: 18px 20px; width: 380px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.45); border-top: 4px solid #d63031;
+  }
+  #alert-card h3 { margin: 0 0 10px; font-size: 15px; color: #d63031; display: flex; align-items: center; gap: 8px; }
+  #alert-msg { font-size: 13px; color: #2d3436; white-space: pre-wrap; line-height: 1.45; }
+  #alert-card .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #alert-card button { padding: 7px 16px; }
+  #modal-card { background:#fff; border-radius: 8px; padding: 18px; width: 320px; box-shadow: 0 4px 24px rgba(0,0,0,.4); }
+  #modal-card h3 { margin: 0 0 12px; font-size: 15px; }
+  #modal-card .btns { display:flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #modal-card button { padding: 7px 14px; }
+  #modal-card button.primary { width: auto; margin-top: 0; }
+
+  .maplibregl-popup-content { font-size: 12px; }
+  .maplibregl-popup-content button { font-size: 11px; margin-top: 4px; }
+
+  /* ---- layers control (bottom-left, opens upward) ---- */
+  /* must sit above the panels so the expanded list is never covered */
+  .maplibregl-ctrl-bottom-left { z-index: 8; }
+  .layers-ctrl { position: relative; }
+  .layers-ctrl #bs-toggle {
+    display: flex; align-items: center; gap: 6px; width: auto; min-width: 150px;
+    padding: 6px 9px; border: none; background: #fff; cursor: pointer;
+    font-size: 12px; font-weight: 600; color: #2d3436; white-space: nowrap;
+  }
+  .layers-ctrl .bs-ico { font-size: 13px; }
+  .layers-ctrl #bs-current { font-weight: 400; color: #636e72; }
+  #layers-content {
+    display: none; width: 300px; max-height: 70vh; overflow-y: auto;
+    padding: 4px 12px 12px; border-top: 1px solid #eee; background: #fff; text-align: left;
+  }
+  .layers-ctrl.open #layers-content { display: block; }
+</style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="drawbar">
+    <b>Drawing incident</b>
+    <span id="draw-count">0 points</span>
+    <button onclick="finishDraw()">Finish</button>
+    <button onclick="cancelDraw()">Cancel</button>
+  </div>
+
+  <!-- ---------- INCIDENTS (left) ---------- -->
+  <div id="panel-incidents" class="panel">
+    <div class="panel-head" onclick="togglePanel('incidents')">
+      <h2>Incidents</h2>
+      <span id="count" class="count">0</span>
+      <span class="chev">&#9662;</span>
+    </div>
+    <div class="panel-body">
+      <div class="hint">Click <b>Draw polygon</b>, then click the map to add corners. Finish to save.</div>
+      <button id="btn-draw" class="primary" onclick="startDraw()">Draw polygon</button>
+      <div class="sep"></div>
+      <div id="incident-list"><div class="empty">Loading&hellip;</div></div>
+    </div>
+  </div>
+
+  <!-- ---------- ROUTING (right) ---------- -->
+  <div id="panel-routing" class="panel">
+    <div class="panel-head" onclick="togglePanel('routing')">
+      <h2>Routing</h2>
+      <span class="chev">&#9662;</span>
+    </div>
+    <div class="panel-body">
+      <div id="hint" class="hint">Right-click the map to set the origin (A).</div>
+      <div id="waypoints"></div>
+      <label for="profile">Profile</label>
+      <select id="profile">
+        <option value="car">car</option>
+        <option value="foot">foot</option>
+        <option value="bike">bike</option>
+      </select>
+      <label class="check"><input id="apply" type="checkbox" checked> Apply active incidents (blocking)</label>
+      <button id="route-btn" class="primary" onclick="runRoute({fit:true})">Route &amp; fit view</button>
+      <button class="wide" onclick="clearPoints()">Clear points</button>
+      <div id="error"></div>
+      <div id="result">
+        <div id="summary"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- LAYERS (moved into the map control on load) ---------- -->
+  <div id="layers-content">
+    <div class="sec">3D terrain</div>
+    <label class="check"><input id="terrain-on" type="checkbox" checked> Enable 3D terrain</label>
+    <label for="exag">Exaggeration</label>
+    <div class="rng">
+      <input id="exag" type="range" min="0" max="3" step="0.1" value="1.4">
+      <span id="exag-val">1.4</span>
+    </div>
+    <label for="pitch">Pitch</label>
+    <div class="rng">
+      <input id="pitch" type="range" min="0" max="85" step="1" value="60">
+      <span id="pitch-val">60&deg;</span>
+    </div>
+    <label class="check"><input id="hillshade-on" type="checkbox" checked> Hillshade</label>
+    <label for="terrain-src">Terrain source (raster-dem)</label>
+    <select id="terrain-src"></select>
+
+    <div class="sec">Base layer</div>
+    <div id="base-notice" style="display:none;font-size:11px;color:#b34700;background:#fff5e6;border:1px solid #ffd9a8;border-radius:4px;padding:6px 8px;margin-bottom:6px"></div>
+    <div id="baselist" class="baselist"></div>
+
+    <div class="sec">Added layers</div>
+    <div id="ovlist"><div class="empty">None added yet.</div></div>
+
+    <div class="sec">Add a tile layer</div>
+    <label for="l-name">Name</label>
+    <input id="l-name" type="text" placeholder="My layer">
+    <label for="l-type">Type</label>
+    <select id="l-type">
+      <option value="xyz">XYZ raster tiles</option>
+      <option value="wms">WMS</option>
+      <option value="dem">Terrain / DEM (raster-dem)</option>
+    </select>
+    <label for="l-url" id="l-url-label">URL template</label>
+    <input id="l-url" type="text" placeholder="https://host/{z}/{x}/{y}.png">
+    <div id="wms-extra" style="display:none">
+      <label for="l-wms-layers">WMS layers</label>
+      <input id="l-wms-layers" type="text" placeholder="layer1,layer2">
+    </div>
+    <div id="dem-extra" style="display:none">
+      <label for="l-enc">DEM encoding</label>
+      <select id="l-enc">
+        <option value="terrarium">terrarium</option>
+        <option value="mapbox">mapbox</option>
+      </select>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="l-tilesize">Tile size</label>
+        <input id="l-tilesize" type="number" value="256" min="64" max="1024" step="64">
+      </div>
+      <div>
+        <label for="l-maxzoom">Max zoom</label>
+        <input id="l-maxzoom" type="number" value="19" min="1" max="24">
+      </div>
+    </div>
+    <label for="l-attr">Attribution (optional)</label>
+    <input id="l-attr" type="text" placeholder="&copy; Provider">
+    <label class="check"><input id="l-persist" type="checkbox" checked> Save locally for future sessions</label>
+    <button class="primary" onclick="addLayerFromForm()">Add layer</button>
+    <div id="l-error" style="display:none;color:#d63031;font-size:12px;margin-top:8px"></div>
+  </div>
+
+  <div id="modal">
+    <div id="modal-card">
+      <h3>Record incident</h3>
+      <label for="inc-type">Type</label>
+      <select id="inc-type">
+        <option value="ROAD_CLOSURE">Road closure</option>
+        <option value="ACCIDENT">Accident</option>
+        <option value="CONSTRUCTION">Construction</option>
+        <option value="HAZARD">Hazard</option>
+        <option value="OTHER">Other</option>
+      </select>
+      <label for="inc-desc">Description</label>
+      <input id="inc-desc" type="text" placeholder="e.g. Bridge collapse on Ring Road">
+      <div class="btns">
+        <button onclick="cancelModal()">Cancel</button>
+        <button class="primary" onclick="saveIncident()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ctxmenu">
+    <button type="button" onclick="ctxAction('origin')">Set as origin (A)</button>
+    <button type="button" onclick="ctxAction('stop')">Add stop</button>
+    <button type="button" onclick="ctxAction('dest')">Set as destination (B)</button>
+    <div class="ctx-sep"></div>
+    <button type="button" class="ctx-danger" onclick="ctxAction('clear')">Clear all points</button>
+  </div>
+
+  <div id="alertbox">
+    <div id="alert-card">
+      <h3><span>&#9888;</span> Route not possible</h3>
+      <div id="alert-msg"></div>
+      <div class="btns">
+        <button class="primary" onclick="closeAlert()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

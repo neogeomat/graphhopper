@@ -1,0 +1,21 @@
+# VCS / IDE
+.git
+.gitignore
+.idea/
+*.iml
+
+# Build output (the fat-jar is rebuilt inside the Docker build stage)
+**/target/
+
+# Runtime data — never bake into the image; mount at runtime instead
+graph-cache/
+logs/
+*.pbf
+*.osm.pbf
+*.osm.gz
+*.osm.xml
+
+# Docker plumbing
+Dockerfile
+docker-compose.yml
+.dockerignore
