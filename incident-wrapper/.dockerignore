@@ -1,0 +1,13 @@
+# Keep the build context small and, above all, keep the API key out of the image.
+.env
+.venv/
+data/
+incidents.db
+incidents.db-journal
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+requirements-dev.txt
+pytest.ini
+README.md

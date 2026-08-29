@@ -739,13 +739,61 @@ function removeWaypoint(i) {
   afterWaypointChange();
 }
 
-function editWaypoint(i, value) {
+/** placeId -> {lat, lng, name}. Baato's /search has no coordinates, so every
+ *  place resolution needs this second hop. */
+async function placeCentroid(placeId, fallbackName) {
+  const url = new URL('/baato/api/places', location.origin);
+  url.searchParams.set('placeId', String(placeId));
+  const resp = await fetch(url);
+  const body = await resp.json();
+  if (!resp.ok) throw new Error(body.message || ('HTTP ' + resp.status));
+  const place = (body.data || [])[0];
+  const c = place && place.centroid;
+  if (!c || !isFinite(c.lat) || !isFinite(c.lon)) throw new Error('no coordinates for this place');
+  return { lat: c.lat, lng: c.lon, name: (place && place.name) || fallbackName || '' };
+}
+
+/** Free-text place name -> {lat, lng, name}, taking Baato's best match. */
+async function geocodeBest(q) {
+  if (!baatoConfigured) throw new Error('place search needs BAATO_KEY on the server');
+  const c = map.getCenter();
+  const url = new URL('/baato/api/search', location.origin);
+  url.searchParams.set('q', q);
+  url.searchParams.set('limit', '1');
+  url.searchParams.set('lat', c.lat.toFixed(6));
+  url.searchParams.set('lon', c.lng.toFixed(6));
+  const resp = await fetch(url);
+  const body = await resp.json();
+  if (!resp.ok) throw new Error(body.message || ('HTTP ' + resp.status));
+  const hit = (body.data || [])[0];
+  if (!hit) throw new Error('no place matches that name');
+  return placeCentroid(hit.placeId, hit.name);
+}
+
+/** A waypoint row accepts either `lat,lon` or a place name. */
+async function editWaypoint(i, value) {
+  const v = String(value == null ? '' : value).trim();
+  if (!waypoints[i]) return;
+  document.getElementById('error').style.display = 'none';
+  if (!v) { renderWaypoints(); return; }        // empty box -> put the coords back
+
   try {
-    moveWaypoint(i, parsePoint(value));
-    document.getElementById('error').style.display = 'none';
+    moveWaypoint(i, parsePoint(v));             // coordinates
     afterWaypointChange();
+    geoStatus('');
+    return;
+  } catch (e) { /* not lat,lon — fall through and treat it as a place name */ }
+
+  geoStatus('Looking up “' + v + '”…');
+  try {
+    const hit = await geocodeBest(v);
+    if (!waypoints[i]) return;                  // removed while we were waiting
+    moveWaypoint(i, hit);
+    afterWaypointChange();
+    geoStatus('“' + hit.name + '” → ' + wpLabel(i));
   } catch (e) {
-    showError(e.message);
+    geoStatus('Could not find “' + v + '”: ' + e.message, true);
+    renderWaypoints();                          // restore the previous coordinates
   }
 }
 
@@ -759,6 +807,7 @@ function renderWaypoints() {
     return '<div class="wp">' +
       '<span class="wp-badge ' + wpRole(i) + '">' + wpLabel(i) + '</span>' +
       '<input type="text" value="' + w.lat.toFixed(6) + ',' + w.lng.toFixed(6) + '"' +
+        ' title="lat,lon or a place name" placeholder="lat,lon or place name"' +
         ' onchange="editWaypoint(' + i + ', this.value)">' +
       '<button title="Remove this point" onclick="removeWaypoint(' + i + ')">&#10005;</button>' +
     '</div>';
@@ -824,6 +873,129 @@ document.addEventListener('click', function (ev) {
   if (!ev.target.closest('#ctxmenu')) hideCtxMenu();
 });
 document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') hideCtxMenu(); });
+
+// ---- Baato geocoder -----------------------------------------------------
+// Two-step API, both hops through the wrapper proxy so the key stays server-side:
+//   /baato/api/search?q=…      -> placeId, name, address (NO coordinates)
+//   /baato/api/places?placeId= -> data[0].centroid {lat, lon}
+let geoTimer = null, geoSeq = 0, GEO_RESULTS = [];
+
+function geoStatus(msg, isErr) {
+  const el = document.getElementById('geo-status');
+  el.textContent = msg || '';
+  el.classList.toggle('err', !!isErr);
+}
+
+/** Drop the current suggestions and invalidate any in-flight response.
+ *  Without this, results for the *previous* query stay on screen and clickable
+ *  while a new one is loading — clicking one silently adds the wrong place. */
+function invalidateGeoResults() {
+  geoSeq++;
+  GEO_RESULTS = [];
+  document.getElementById('geo-results').innerHTML = '';
+}
+
+function scheduleGeoSearch(delay) {
+  if (geoTimer) clearTimeout(geoTimer);
+  geoTimer = setTimeout(runGeoSearch, delay === undefined ? 350 : delay);
+}
+
+async function runGeoSearch() {
+  const q = document.getElementById('geo-q').value.trim();
+  const seq = ++geoSeq;
+  if (q.length < 2) {
+    GEO_RESULTS = [];
+    document.getElementById('geo-results').innerHTML = '';
+    geoStatus('');
+    return;
+  }
+  if (!baatoConfigured) {
+    geoStatus('Place search needs BAATO_KEY on the server.', true);
+    return;
+  }
+  geoStatus('Searching…');
+  try {
+    // bias results towards what the user is looking at
+    const c = map.getCenter();
+    const url = new URL('/baato/api/search', location.origin);
+    url.searchParams.set('q', q);
+    url.searchParams.set('limit', '8');
+    url.searchParams.set('lat', c.lat.toFixed(6));
+    url.searchParams.set('lon', c.lng.toFixed(6));
+    const resp = await fetch(url);
+    const body = await resp.json();
+    if (seq !== geoSeq) return;                       // superseded by a newer query
+    if (!resp.ok) throw new Error(body.message || ('HTTP ' + resp.status));
+    GEO_RESULTS = body.data || [];
+    renderGeoResults();
+    geoStatus(GEO_RESULTS.length ? '' : 'No matches for “' + q + '”.');
+  } catch (e) {
+    if (seq !== geoSeq) return;
+    GEO_RESULTS = [];
+    document.getElementById('geo-results').innerHTML = '';
+    geoStatus('Search failed: ' + e.message, true);
+  }
+}
+
+function renderGeoResults() {
+  document.getElementById('geo-results').innerHTML = GEO_RESULTS.map(function (r, i) {
+    const km = (typeof r.radialDistanceInKm === 'number' && r.radialDistanceInKm > 0)
+      ? r.radialDistanceInKm.toFixed(1) + ' km' : '';
+    return '<div class="g">' +
+      '<div class="g-nm">' + esc(r.name || '(unnamed)') + '</div>' +
+      (r.address ? '<div class="g-ad">' + esc(r.address) + '</div>' : '') +
+      '<div class="g-bot">' +
+        (r.type ? '<span class="g-ty">' + esc(r.type) + '</span>' : '') +
+        '<span class="g-km">' + km + '</span>' +
+        '<button type="button" class="g-a" title="Set as origin"      onclick="geoPick(' + i + ',\'origin\')">A</button>' +
+        '<button type="button" class="g-s" title="Add as stop"        onclick="geoPick(' + i + ',\'stop\')">+</button>' +
+        '<button type="button" class="g-b" title="Set as destination" onclick="geoPick(' + i + ',\'dest\')">B</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+/** Resolve a search hit to coordinates and drop it in as a waypoint. */
+async function geoPick(idx, kind) {
+  const r = GEO_RESULTS[idx];
+  if (!r) return;
+  geoStatus('Locating “' + (r.name || '') + '”…');
+  try {
+    const hit = await placeCentroid(r.placeId, r.name);
+    setWaypoint(kind, hit);
+    geoStatus('Added “' + hit.name + '”.');
+    // bring it into view when it would otherwise be off-screen
+    if (!map.getBounds().contains([hit.lng, hit.lat])) {
+      map.easeTo({ center: [hit.lng, hit.lat], duration: 700 });
+    }
+  } catch (e) {
+    geoStatus('Could not locate that place: ' + e.message, true);
+  }
+}
+
+function clearGeoSearch() {
+  if (geoTimer) { clearTimeout(geoTimer); geoTimer = null; }
+  geoSeq++;
+  GEO_RESULTS = [];
+  document.getElementById('geo-q').value = '';
+  document.getElementById('geo-results').innerHTML = '';
+  geoStatus('');
+}
+
+document.getElementById('geo-q').addEventListener('input', function () {
+  // the old list no longer matches what is typed — take it away at once
+  invalidateGeoResults();
+  geoStatus(this.value.trim().length >= 2 ? 'Searching…' : '');
+  scheduleGeoSearch();
+});
+document.getElementById('geo-q').addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  // Enter takes the best match: origin first if unset, otherwise destination
+  if (GEO_RESULTS.length) geoPick(0, waypoints.length ? 'dest' : 'origin');
+  else scheduleGeoSearch(0);
+});
+document.getElementById('geo-clear').addEventListener('click', clearGeoSearch);
 
 document.getElementById('profile').addEventListener('change', function () { scheduleRoute(0); });
 document.getElementById('apply').addEventListener('change', function () { scheduleRoute(0); });

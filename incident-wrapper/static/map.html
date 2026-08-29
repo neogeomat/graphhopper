@@ -40,6 +40,24 @@
   .mode-row button { flex: 1; }
   .mode-row button.active { background: #0984e3; color: #fff; border-color: #0984e3; }
 
+  /* geocoder */
+  .geo-row { display: flex; gap: 5px; align-items: center; }
+  .geo-row input { flex: 1; }
+  .geo-row button { padding: 5px 8px; font-size: 11px; color: #666; }
+  .geo-status { font-size: 11px; color: #888; min-height: 0; margin-top: 4px; }
+  .geo-status.err { color: #d63031; }
+  #geo-results { margin-top: 4px; max-height: 210px; overflow-y: auto; }
+  #geo-results .g { border: 1px solid #eee; border-radius: 4px; padding: 6px 7px; margin-bottom: 5px; }
+  #geo-results .g-nm { font-size: 12px; font-weight: 600; color: #2d3436; }
+  #geo-results .g-ad { font-size: 11px; color: #777; margin-top: 1px; }
+  #geo-results .g-bot { display: flex; align-items: center; gap: 5px; margin-top: 5px; }
+  #geo-results .g-ty { font-size: 9px; color: #888; background: #f1f2f6; border-radius: 3px; padding: 1px 5px; }
+  #geo-results .g-km { font-size: 9px; color: #999; margin-right: auto; }
+  #geo-results .g-bot button { font-size: 10px; padding: 2px 7px; font-weight: 700; }
+  #geo-results .g-a { color: #0984e3; border-color: #0984e3; }
+  #geo-results .g-s { color: #6c5ce7; border-color: #6c5ce7; }
+  #geo-results .g-b { color: #d63031; border-color: #d63031; }
+
   /* waypoint list */
   .wp { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
   .wp-badge {
@@ -199,6 +217,14 @@
       <span class="chev">&#9662;</span>
     </div>
     <div class="panel-body">
+      <label for="geo-q">Search a place (Baato)</label>
+      <div class="geo-row">
+        <input id="geo-q" type="text" placeholder="e.g. Patan Durbar Square" autocomplete="off">
+        <button type="button" id="geo-clear" title="Clear search">&#10005;</button>
+      </div>
+      <div id="geo-status" class="geo-status"></div>
+      <div id="geo-results"></div>
+
       <div id="hint" class="hint">Right-click the map to set the origin (A).</div>
       <div id="waypoints"></div>
       <label for="profile">Profile</label>

@@ -17,4 +17,9 @@ if [ -f .env ]; then
     set +a
 fi
 
+# Keep one incident DB for both host and Docker runs: docker-compose mounts
+# ./data at /data, so the container writes the very same file.
+mkdir -p data
+export INCIDENTS_DB="${INCIDENTS_DB:-$PWD/data/incidents.db}"
+
 exec .venv/bin/uvicorn app:app --host 0.0.0.0 --port "${PORT:-8000}"

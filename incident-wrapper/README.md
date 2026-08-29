@@ -13,8 +13,45 @@ GraphHopper fork itself unmodified and adds two things on top:
 
 ## Run
 
+Two ways — Docker (both services) or straight on the host.
+
+### Docker (recommended)
+
+From the repo root:
+
 ```bash
-./run.sh          # bootstraps a venv and starts uvicorn on :8000
+docker compose up -d          # graphhopper :8989/:8990  +  wrapper :8000
+docker compose logs -f wrapper
+```
+
+| Service | Container | Ports |
+|---|---|---|
+| `graphhopper` | `graphhopper-landmark` | 8989 (API + `/maps`), 8990 (admin) |
+| `wrapper` | `graphhopper-incident-wrapper` | 8000 (dashboard `/`, API, `/docs`) |
+
+Details that matter:
+
+- The wrapper reaches the engine as **`http://graphhopper:8989`** (compose service
+  name), not localhost.
+- **`BAATO_KEY` is injected at runtime** from the gitignored `incident-wrapper/.env`
+  via `env_file … required: false` — the stack still starts without it, and
+  `.dockerignore` keeps `.env` out of the image entirely (verified: no `bpk.` string
+  anywhere in `/app`).
+- The incident DB is bind-mounted as a **directory**, `./incident-wrapper/data:/data`
+  with `INCIDENTS_DB=/data/incidents.db`, so closures survive rebuilds. A directory
+  rather than a single file because Docker would create a *directory* named
+  `incidents.db` on a fresh clone, and SQLite needs to write its journal alongside
+  the database.
+- `run.sh` defaults to that **same** `data/incidents.db`, so host and container runs
+  share one database instead of quietly diverging.
+- GraphHopper's healthcheck uses `bash` + `/dev/tcp` — the JRE image ships neither
+  `curl` nor `wget`. `start_period` is 300 s because a cold start loads the 173 M
+  graph (and a first-ever run imports the PBF).
+
+### Host
+
+```bash
+./run.sh          # bootstraps a venv, sources .env, uvicorn on :8000
 ```
 
 Interactive API docs at http://localhost:8000/docs.
@@ -60,16 +97,25 @@ Three independent surfaces (no tabs):
   are clickable for a popup, and are listed with show/deactivate/delete actions.
   **Any change to the incidents layer — save, activate, deactivate, delete —
   immediately re-runs the current route.**
-- **Routing — right panel.** Points are placed with **right-click** on the map,
-  which opens a context menu: *Set as origin (A)* · *Add stop* · *Set as
-  destination (B)* · *Clear all points*. Stops are inserted **between** A and B and
-  numbered 1, 2, 3… in travel order, so any number of via-points is supported.
-  Remove a point by right-clicking its marker or hitting ✕ in the list; drag a
-  marker to move it; edit a row's `lat,lon` to type coordinates. The route
-  recalculates **automatically** (debounced) on any change — points added, moved,
-  removed, profile switched, or the incident toggle flipped. Summary, distance/time
-  and turn-by-turn instructions with landmark badges render in the same panel.
-  Dropping below two points clears the line and the summary.
+- **Routing — right panel.** Starts with a **Baato place search**: type at least two
+  characters and suggestions appear (debounced 350 ms, biased toward the current map
+  centre). Each hit shows name, address and type with three buttons — **A** (origin),
+  **+** (add stop), **B** (destination); <kbd>Enter</kbd> takes the top hit as the
+  origin if none is set, otherwise the destination. Geocoding is **two hops through
+  the wrapper proxy**, so the key stays server-side: `/baato/api/search?q=…` returns
+  `placeId` + name + address but **no coordinates**, then `/baato/api/places?placeId=…`
+  yields `data[0].centroid`. Typing invalidates the previous list immediately —
+  otherwise stale suggestions stay clickable and you silently add the wrong place.
+
+  Points can also be placed with **right-click** on the map, which opens a context
+  menu: *Set as origin (A)* · *Add stop* · *Set as destination (B)* · *Clear all
+  points*. Stops are inserted **between** A and B and numbered 1, 2, 3… in travel
+  order, so any number of via-points is supported. Remove a point by right-clicking
+  its marker or hitting ✕ in the list; drag a marker to move it; edit a row's
+  `lat,lon` to type coordinates. The route recalculates **automatically** (debounced)
+  on any change — points added, moved, removed, profile switched, or the incident
+  toggle flipped. Summary distance/time renders in the same panel. Dropping below two
+  points clears the line and the summary.
   **Left-click never places routing points** — that is reserved for inspecting
   incidents and drawing polygons, so clicking an incident no longer moves the
   destination.
