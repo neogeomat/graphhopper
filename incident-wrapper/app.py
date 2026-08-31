@@ -13,12 +13,19 @@ Configuration (environment variables):
   GRAPHOPPER_URL   upstream GraphHopper base URL (default http://localhost:8989)
   INCIDENTS_DB     SQLite file for incidents (default ./incidents.db next to this file)
   PORT             listen port (default 8000)
+  ADMIN_USERNAME   login username (default 'admin')
+  ADMIN_PASSWORD   login password (default 'admin' — change it!)
+  TOKEN_TTL_HOURS  login session lifetime in hours (default 24)
 
 Run:
   ./run.sh            # bootstraps a venv, installs deps, starts uvicorn on :8000
   # then open http://localhost:8000/docs
 """
+import base64
+import hashlib
+import hmac
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -30,7 +37,7 @@ from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
-from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -39,6 +46,15 @@ GRAPHOPPER_URL = os.environ.get("GRAPHOPPER_URL", "http://localhost:8989").rstri
 BAATO_KEY = os.environ.get("BAATO_KEY", "")
 DB_PATH = os.environ.get("INCIDENTS_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "incidents.db"))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Authentication — only authenticated users may add/edit/delete incidents.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+TOKEN_TTL_SECONDS = int(os.environ.get("TOKEN_TTL_HOURS", "24")) * 3600
+
+_LOGGER = logging.getLogger("incident-wrapper")
+if ADMIN_PASSWORD == "admin":
+    _LOGGER.warning("ADMIN_PASSWORD is still the default 'admin' — set it via the environment")
 
 app = FastAPI(title="GraphHopper incident & custom-model wrapper", version="1.0.0")
 
@@ -75,6 +91,85 @@ def _init_db():
 
 
 _init_db()
+
+
+# ---------------------------------------------------------------------------
+# authentication — HMAC-signed bearer tokens (stdlib only, no new deps)
+# ---------------------------------------------------------------------------
+def _b64e(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _signing_key() -> bytes:
+    """A stable key derived from the admin password — rotating the password
+    invalidates every token already issued."""
+    return hashlib.sha256(("incident-wrapper:" + ADMIN_PASSWORD).encode()).digest()
+
+
+def _sign_token(username: str) -> str:
+    payload = {"sub": username, "exp": int(time.time()) + TOKEN_TTL_SECONDS}
+    body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64e(hmac.new(_signing_key(), body.encode(), hashlib.sha256).digest())
+    return body + "." + sig
+
+
+def _verify_token(token: str) -> str:
+    """Return the token's subject, or raise 401."""
+    try:
+        body, sig = token.split(".", 1)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    expected = hmac.new(_signing_key(), body.encode(), hashlib.sha256).digest()
+    try:
+        provided = _b64d(sig)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not hmac.compare_digest(expected, provided):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        payload = json.loads(_b64d(body))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("exp", 0) < time.time():
+        raise HTTPException(status_code=401, detail="Token expired")
+    return payload.get("sub", "")
+
+
+def require_auth(authorization: Optional[str] = Header(None)) -> str:
+    """FastAPI dependency: reject requests without a valid bearer token."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return _verify_token(authorization[len("Bearer "):].strip())
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/login")
+def login(body: LoginIn):
+    if not (hmac.compare_digest(body.username, ADMIN_USERNAME)
+            and hmac.compare_digest(body.password, ADMIN_PASSWORD)):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"token": _sign_token(body.username), "username": body.username,
+            "expires_in": TOKEN_TTL_SECONDS}
+
+
+@app.get("/auth/status")
+def auth_status(authorization: Optional[str] = Header(None)):
+    """Tell the dashboard whether a stored token is still valid (never 401s)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"authenticated": False, "username": None}
+    try:
+        user = _verify_token(authorization[len("Bearer "):].strip())
+        return {"authenticated": True, "username": user}
+    except HTTPException:
+        return {"authenticated": False, "username": None}
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +285,7 @@ def list_incidents():
 
 
 @app.post("/incidents", status_code=201)
-def create_incident(body: IncidentIn):
+def create_incident(body: IncidentIn, auth_user: str = Depends(require_auth)):
     coords = close_ring(body.coordinates)
     incident_id = "inc_" + uuid.uuid4().hex[:12]
     now = int(time.time() * 1000)
@@ -209,7 +304,7 @@ def get_incident(incident_id: str):
 
 
 @app.put("/incidents/{incident_id}")
-def update_incident(incident_id: str, patch: IncidentPatch):
+def update_incident(incident_id: str, patch: IncidentPatch, auth_user: str = Depends(require_auth)):
     _get_row(incident_id)  # 404 if missing
     fields, values = [], []
     if patch.type is not None:
@@ -233,7 +328,7 @@ def update_incident(incident_id: str, patch: IncidentPatch):
 
 
 @app.delete("/incidents/{incident_id}", status_code=204)
-def delete_incident(incident_id: str):
+def delete_incident(incident_id: str, auth_user: str = Depends(require_auth)):
     _get_row(incident_id)  # 404 if missing
     with db() as conn:
         conn.execute("DELETE FROM incidents WHERE id = ?", (incident_id,))

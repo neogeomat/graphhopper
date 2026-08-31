@@ -165,10 +165,18 @@ BAATO_KEY=<your-key>          # required for the Baato Breeze basemap + geocodin
 GRAPHOPPER_URL=http://localhost:8989
 INCIDENTS_DB=<absolute-or-relative-path>/incidents.db   # default: data/incidents.db
 PORT=8000
+ADMIN_USERNAME=admin          # login for editing incidents
+ADMIN_PASSWORD=change-me      # change from the default 'admin'
 ```
 
 The wrapper falls back to Esri World Imagery (with a notice) when `BAATO_KEY`
 is absent, so the stack still runs without it.
+
+**Authentication**: editing incidents (create/update/delete) requires a login —
+`POST /login` returns a bearer token that the dashboard stores and sends as
+`Authorization: Bearer …`. Reads stay public. The credentials default to
+`admin`/`admin`; set a real `ADMIN_PASSWORD` (rotating it invalidates all
+tokens).
 
 ### 3.8 Tests
 

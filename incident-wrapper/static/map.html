@@ -29,7 +29,7 @@
   .panel-body { overflow-y: auto; padding: 10px 12px; }
 
   label { display: block; font-size: 12px; color: #555; margin: 8px 0 3px; }
-  input[type=text], input[type=number], select {
+  input[type=text], input[type=password], input[type=number], select {
     width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
   }
   button { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px; }
@@ -175,6 +175,21 @@
   #modal-card button { padding: 7px 14px; }
   #modal-card button.primary { width: auto; margin-top: 0; }
 
+  /* auth / login */
+  #authbar { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+  #authbar .auth-status { font-size: 12px; color: #636e72; flex: 1; }
+  #authbar .auth-status.on { color: #00b894; font-weight: 600; }
+  #authbar button { font-size: 11px; padding: 4px 10px; }
+  #login-modal { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 21; display: none; align-items: center; justify-content: center; }
+  #login-modal.open { display: flex; }
+  #login-card { background:#fff; border-radius: 8px; padding: 18px; width: 300px; box-shadow: 0 4px 24px rgba(0,0,0,.4); border-top: 4px solid #0984e3; }
+  #login-card h3 { margin: 0 0 4px; font-size: 15px; }
+  #login-card .muted { font-size: 12px; color: #777; margin-bottom: 10px; }
+  #login-error { color: #d63031; font-size: 12px; min-height: 16px; margin-top: 4px; }
+  #login-card .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  #login-card button { padding: 7px 14px; }
+  #login-card button.primary { width: auto; margin-top: 0; }
+
   .maplibregl-popup-content { font-size: 12px; }
   .maplibregl-popup-content button { font-size: 11px; margin-top: 4px; }
 
@@ -202,9 +217,9 @@
   <div id="apptitle">Rasuwa Flood — Dynamic Real-Time Road Update &amp; Route Monitoring System</div>
 
   <div id="drawbar">
-    <b>Drawing incident</b>
+    <b id="drawbar-title">Drawing incident</b>
     <span id="draw-count">0 points</span>
-    <button onclick="finishDraw()">Finish</button>
+    <button id="drawbar-action" onclick="drawbarAction()">Finish</button>
     <button onclick="cancelDraw()">Cancel</button>
   </div>
 
@@ -216,7 +231,11 @@
       <span class="chev">&#9662;</span>
     </div>
     <div class="panel-body">
-      <div class="hint">Click <b>Draw polygon</b>, then click the map to add corners. Finish to save.</div>
+      <div id="authbar">
+        <span id="auth-status" class="auth-status">Not logged in</span>
+        <button id="auth-btn" type="button" onclick="toggleLogin()">Log in</button>
+      </div>
+      <div id="draw-hint" class="hint">Click <b>Draw polygon</b>, then click the map to add corners. Finish to save.</div>
       <button id="btn-draw" class="primary" onclick="startDraw()">Draw polygon</button>
       <div class="sep"></div>
       <div id="incident-list"><div class="empty">Loading&hellip;</div></div>
@@ -271,14 +290,12 @@
       <span id="pitch-val">60&deg;</span>
     </div>
     <label class="check"><input id="hillshade-on" type="checkbox" checked> Hillshade</label>
-    <label for="terrain-src">Terrain source (raster-dem)</label>
-    <select id="terrain-src"></select>
 
     <div class="sec">Base layer</div>
     <div id="base-notice" style="display:none;font-size:11px;color:#b34700;background:#fff5e6;border:1px solid #ffd9a8;border-radius:4px;padding:6px 8px;margin-bottom:6px"></div>
     <div id="baselist" class="baselist"></div>
 
-    <div class="sec">Added layers</div>
+    <div class="sec">Tile layers</div>
     <div id="ovlist"><div class="empty">None added yet.</div></div>
 
     <div class="sec">Add a tile layer</div>
@@ -336,6 +353,22 @@
       <div class="btns">
         <button onclick="cancelModal()">Cancel</button>
         <button class="primary" onclick="saveIncident()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="login-modal">
+    <div id="login-card">
+      <h3>Log in</h3>
+      <div class="muted">Editing incident data requires an account.</div>
+      <label for="login-user">Username</label>
+      <input id="login-user" type="text" autocomplete="username">
+      <label for="login-pass">Password</label>
+      <input id="login-pass" type="password" autocomplete="current-password">
+      <div id="login-error"></div>
+      <div class="btns">
+        <button type="button" onclick="hideLogin()">Cancel</button>
+        <button type="button" class="primary" onclick="doLogin()">Log in</button>
       </div>
     </div>
   </div>

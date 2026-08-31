@@ -1,6 +1,7 @@
 /* GraphHopper dashboard — MapLibre GL + Mapterhorn 3D terrain.
- * Layer stack (bottom -> top): basemap, overlay-*, hillshade,
- * incidents-fill/outline, draft-*, route-casing/route-line.
+ * Layer stack (bottom -> top): basemap, overlay-*, hillshade (kept BELOW the
+ * vector labels so its relief tint can't wash out place names), incidents-
+ * fill/outline, draft-*, route-casing/route-line.
  * 'hillshade' always exists, so overlays insert with beforeId='hillshade'.
  */
 
@@ -103,15 +104,6 @@ function baseSourceDef(def) {
 
 function buildStyle(vs) {
   const sources = {}, layers = [];
-  if (vs) {
-    // vector style supplies its own sources + layers; ours stack on top
-    Object.keys(vs.sources || {}).forEach(function (k) { sources[k] = vs.sources[k]; });
-    (vs.layers || []).forEach(function (l) { layers.push(l); });
-  } else if (activeBase && BASEMAPS[activeBase] && BASEMAPS[activeBase].tiles) {
-    sources.basemap = baseSourceDef(BASEMAPS[activeBase]);
-    layers.push({ id: 'basemap', type: 'raster', source: 'basemap' });
-  }
-
   sources['dem-mapterhorn'] = {
     type: 'raster-dem', tiles: MAPTERHORN.tiles, encoding: MAPTERHORN.encoding,
     tileSize: MAPTERHORN.tileSize, maxzoom: MAPTERHORN.maxzoom, attribution: MAPTERHORN.attribution
@@ -124,9 +116,11 @@ function buildStyle(vs) {
   sources.draft = { type: 'geojson', data: EMPTY_FC };
   sources.route = { type: 'geojson', data: EMPTY_FC };
 
-  layers.push(
-    { id: 'hillshade', type: 'hillshade', source: 'dem-hillshade',
-      paint: { 'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#2c3e50' } },
+  const hillshadeLayer = {
+    id: 'hillshade', type: 'hillshade', source: 'dem-hillshade',
+    paint: { 'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#5c6b7a' }
+  };
+  const overlayLayers = [
     { id: 'incidents-fill', type: 'fill', source: 'incidents',
       paint: { 'fill-color': incidentColorExpr(), 'fill-opacity': 0.35 } },
     { id: 'incidents-outline', type: 'line', source: 'incidents',
@@ -146,7 +140,29 @@ function buildStyle(vs) {
     { id: 'route-line', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#0984e3', 'line-width': 5 } }
-  );
+  ];
+
+  if (vs) {
+    // vector style supplies its own sources + layers; ours stack on top
+    Object.keys(vs.sources || {}).forEach(function (k) { sources[k] = vs.sources[k]; });
+    // Insert the hillshade BELOW the labels (first symbol layer) so the relief
+    // tint can't wash out the black place names. Incidents/draft/route still
+    // stack above everything.
+    let placed = false;
+    (vs.layers || []).forEach(function (l) {
+      if (!placed && l.type === 'symbol') { layers.push(hillshadeLayer); placed = true; }
+      layers.push(l);
+    });
+    if (!placed) layers.push(hillshadeLayer);   // no label layers — keep it on top
+    overlayLayers.forEach(function (l) { layers.push(l); });
+  } else {
+    if (activeBase && BASEMAPS[activeBase] && BASEMAPS[activeBase].tiles) {
+      sources.basemap = baseSourceDef(BASEMAPS[activeBase]);
+      layers.push({ id: 'basemap', type: 'raster', source: 'basemap' });
+    }
+    layers.push(hillshadeLayer);
+    overlayLayers.forEach(function (l) { layers.push(l); });
+  }
 
   const style = { version: 8, sources: sources, layers: layers };
   if (vs) {
@@ -194,7 +210,6 @@ map.on('load', async function () {
   applyTerrain();
   restoreOverlayLayers();
   renderBaseList();
-  renderTerrainSourceList();
   renderOverlayList();
   loadIncidents();
   bindLayerFormUI();
@@ -202,6 +217,7 @@ map.on('load', async function () {
   updateHint();
   await initBaatoKey();
   await initDefaultBasemap();
+  setHillshade();   // covers the boot path where the saved base === activeBase (no swap ran)
 });
 
 // ---- terrain ------------------------------------------------------------
@@ -218,7 +234,16 @@ function applyTerrain() {
 
 function setHillshade() {
   if (!styleReady) return;
-  const on = document.getElementById('hillshade-on').checked;
+  const cb = document.getElementById('hillshade-on');
+  // Esri World Imagery already carries shaded relief, so a synthetic hillshade
+  // overlay would only muddy the aerial imagery. Force it off there and disable
+  // the toggle; honour the checkbox on every other basemap.
+  const esri = activeBase === 'esri_imagery';
+  const on = !esri && cb.checked;
+  if (cb) {
+    cb.disabled = esri;
+    cb.title = esri ? 'Hillshade is disabled on Esri World Imagery (it already includes shaded relief)' : '';
+  }
   map.setLayoutProperty('hillshade', 'visibility', on ? 'visible' : 'none');
 }
 
@@ -301,6 +326,7 @@ async function setBasemap(id, opts) {
     map.addSource('basemap', baseSourceDef(def));
     const bottom = map.getStyle().layers[0];
     map.addLayer({ id: 'basemap', type: 'raster', source: 'basemap' }, bottom ? bottom.id : undefined);
+    setHillshade();   // raster→raster swap: re-evaluate the Esri hillshade rule
   }
   try { localStorage.setItem(LS_BASE, activeBase); } catch (e) {}
   baseNotice('');
@@ -438,7 +464,6 @@ function addLayerFromForm() {
   saveOverlays();
   addOverlayLayers(o);
   renderOverlayList();
-  renderTerrainSourceList();
   document.getElementById('l-name').value = '';
   document.getElementById('l-url').value = '';
   document.getElementById('l-wms-layers').value = '';
@@ -474,7 +499,6 @@ function removeOverlay(id) {
   overlays = overlays.filter(function (x) { return x.id !== id; });
   saveOverlays();
   renderOverlayList();
-  renderTerrainSourceList();
 }
 
 function useAsBase(id) {
@@ -527,17 +551,6 @@ function renderOverlayList() {
 function setTerrainSource(sid) {
   terrainSourceId = sid;
   applyTerrain();
-  renderTerrainSourceList();
-}
-
-function renderTerrainSourceList() {
-  const sel = document.getElementById('terrain-src');
-  const opts = [{ id: 'dem-mapterhorn', name: 'Mapterhorn (terrarium, z0-12)' }];
-  overlays.filter(function (o) { return o.kind === 'dem'; })
-    .forEach(function (o) { opts.push({ id: 'ov-' + o.id, name: o.name }); });
-  sel.innerHTML = opts.map(function (o) {
-    return '<option value="' + o.id + '"' + (o.id === terrainSourceId ? ' selected' : '') + '>' + esc(o.name) + '</option>';
-  }).join('');
 }
 
 function bindLayerFormUI() {
@@ -559,9 +572,6 @@ function bindLayerFormUI() {
   document.getElementById('pitch').addEventListener('input', function () {
     document.getElementById('pitch-val').textContent = this.value + '\u00b0';
     map.easeTo({ pitch: parseFloat(this.value), duration: 0 });
-  });
-  document.getElementById('terrain-src').addEventListener('change', function () {
-    setTerrainSource(this.value);
   });
   map.on('pitchend', function () {
     const p = Math.round(map.getPitch());
@@ -862,7 +872,7 @@ function ctxAction(kind) {
 }
 
 map.on('contextmenu', function (e) {
-  if (drawing) return;                       // don't interfere with polygon drawing
+  if (drawing || editing) return;            // don't interfere with polygon drawing/editing
   if (e.originalEvent) e.originalEvent.preventDefault();
   showCtxMenu(e.point, e.lngLat);
 });
@@ -1074,25 +1084,41 @@ function drawRoute(path, fit) {
 // ---- incident polygon drawing (replaces Leaflet.draw) -------------------
 let drawing = false;
 let draft = [];                  // [[lon,lat], ...]
+let editing = false;             // reshaping an existing incident's geometry
+let editId = null;               // incident id currently being edited
+let dragVertex = -1;             // draft index being dragged (-1 = none)
 
 function startDraw() {
+  if (!isLoggedIn()) { showLogin(); return; }
   drawing = true;
+  editing = false;
+  editId = null;
+  dragVertex = -1;
   draft = [];
   hideCtxMenu();
   openPanel('incidents');
   map.doubleClickZoom.disable();
   map.getCanvas().style.cursor = 'crosshair';
+  document.getElementById('drawbar-title').textContent = 'Drawing incident';
+  document.getElementById('drawbar-action').textContent = 'Finish';
+  document.getElementById('draw-hint').textContent =
+    'Click the map to add corners. Double-click or press Finish to save.';
   document.getElementById('drawbar').classList.add('open');
   updateDraft();
 }
 
 function cancelDraw() {
   drawing = false;
+  editing = false;
+  editId = null;
+  dragVertex = -1;
   draft = [];
   map.doubleClickZoom.enable();
   map.getCanvas().style.cursor = '';
   document.getElementById('drawbar').classList.remove('open');
   map.getSource('draft').setData(EMPTY_FC);
+  document.getElementById('draw-hint').textContent =
+    'Click Draw polygon, then click the map to add corners. Finish to save.';
 }
 
 function updateDraft() {
@@ -1129,13 +1155,66 @@ async function saveIncident() {
     coordinates: draft.slice()          // backend closes the ring
   };
   const resp = await fetch('/incidents', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body)
   });
+  if (resp.status === 401) { onAuthRequired(); return; }
   if (!resp.ok) { alert('Failed to save: ' + (await resp.text())); return; }
   document.getElementById('modal').classList.remove('open');
   cancelDraw();
   await loadIncidents();
   scheduleRoute(0);                     // new closure may change the active route
+}
+
+function drawbarAction() {
+  if (editing) saveEdit();
+  else finishDraw();
+}
+
+// Strip the closing duplicate of a stored (closed) ring so it can be edited as
+// an open vertex list.
+function ringFromIncident(inc) {
+  const c = inc.coordinates.map(function (p) { return [p[0], p[1]]; });
+  if (c.length > 1) {
+    const a = c[0], b = c[c.length - 1];
+    if (a[0] === b[0] && a[1] === b[1]) c.pop();
+  }
+  return c;
+}
+
+function editIncident(id) {
+  if (!isLoggedIn()) { showLogin(); return; }
+  const inc = INCIDENTS.find(function (x) { return x.id === id; });
+  if (!inc) return;
+  drawing = false;
+  editing = true;
+  editId = id;
+  dragVertex = -1;
+  draft = ringFromIncident(inc);
+  if (incidentPopup) { incidentPopup.remove(); incidentPopup = null; }
+  hideCtxMenu();
+  openPanel('incidents');
+  map.doubleClickZoom.disable();
+  map.getCanvas().style.cursor = 'crosshair';
+  document.getElementById('drawbar-title').textContent = 'Edit geometry';
+  document.getElementById('drawbar-action').textContent = 'Save changes';
+  document.getElementById('draw-hint').textContent =
+    'Drag a vertex to move it, click an edge to add one, right-click a vertex to remove it.';
+  document.getElementById('drawbar').classList.add('open');
+  updateDraft();
+}
+
+async function saveEdit() {
+  if (!editId) return;
+  if (draft.length < 3) { alert('A polygon needs at least 3 points.'); return; }
+  const resp = await fetch('/incidents/' + editId, {
+    method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ coordinates: draft.slice() })
+  });
+  if (resp.status === 401) { onAuthRequired(); return; }
+  if (!resp.ok) { alert('Failed to save: ' + (await resp.text())); return; }
+  cancelDraw();
+  await loadIncidents();
+  scheduleRoute(0);
 }
 
 // ---- map click: only draws incident vertices ----------------------------
@@ -1153,13 +1232,70 @@ map.on('dblclick', function (e) {
 });
 
 document.addEventListener('keydown', function (e) {
-  if (!drawing) return;
+  if (!drawing && !editing) return;
   if (e.key === 'Escape') cancelDraw();
-  if (e.key === 'Enter') finishDraw();
+  if (e.key === 'Enter') { if (editing) saveEdit(); else finishDraw(); }
+});
+
+// ---- edit mode: drag vertices, insert on edge, delete on right-click ----
+function projectToSegment(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return [a[0], a[1]];
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return [a[0] + t * dx, a[1] + t * dy];
+}
+
+function insertVertexAt(lngLat) {
+  if (draft.length < 3) return;
+  const p = [lngLat.lng, lngLat.lat];
+  let best = -1, bestDist = Infinity, bestPt = null;
+  for (let i = 0; i < draft.length; i++) {
+    const proj = projectToSegment(p, draft[i], draft[(i + 1) % draft.length]);
+    const d = Math.hypot(p[0] - proj[0], p[1] - proj[1]);
+    if (d < bestDist) { bestDist = d; best = i; bestPt = proj; }
+  }
+  if (best < 0) return;
+  draft.splice(best + 1, 0, bestPt);
+  updateDraft();
+}
+
+map.on('mousedown', 'draft-vertex', function (e) {
+  if (!editing) return;
+  if (e.originalEvent && e.originalEvent.button !== 0) return;   // left-drag only
+  e.preventDefault();                       // stop the map from panning
+  dragVertex = e.features[0].properties.i;
+  map.getCanvas().style.cursor = 'grabbing';
+});
+map.on('mousemove', function (e) {
+  if (!editing || dragVertex < 0) return;
+  draft[dragVertex] = [e.lngLat.lng, e.lngLat.lat];
+  updateDraft();
+});
+function endVertexDrag() {
+  if (dragVertex < 0) return;
+  dragVertex = -1;
+  map.getCanvas().style.cursor = 'crosshair';
+}
+map.on('mouseup', endVertexDrag);
+document.addEventListener('mouseup', endVertexDrag);
+map.on('click', 'draft-line', function (e) {
+  if (!editing) return;
+  e.preventDefault();
+  insertVertexAt(e.lngLat);
+});
+map.on('contextmenu', 'draft-vertex', function (e) {
+  if (!editing) return;
+  e.preventDefault();
+  if (draft.length <= 3) { alert('A polygon needs at least 3 points.'); return; }
+  draft.splice(e.features[0].properties.i, 1);
+  updateDraft();
 });
 
 // ---- incidents ----------------------------------------------------------
 let INCIDENTS = [];
+let incidentPopup = null;
 
 async function loadIncidents() {
   try {
@@ -1204,6 +1340,7 @@ function renderIncidentList() {
       '<div class="desc">' + esc(inc.description || '') + '</div>' +
       '<div class="actions">' +
         '<button onclick="focusIncident(\'' + inc.id + '\')">Show</button>' +
+        '<button onclick="editIncident(\'' + inc.id + '\')">Edit</button>' +
         '<button onclick="toggleIncident(\'' + inc.id + '\',' + (!inc.active) + ')">' +
           (inc.active ? 'Deactivate' : 'Activate') + '</button>' +
         '<button class="danger" onclick="deleteIncident(\'' + inc.id + '\')">Delete</button>' +
@@ -1229,28 +1366,31 @@ function focusIncident(id) {
 
 async function toggleIncident(id, active) {
   const resp = await fetch('/incidents/' + id, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ active: active })
   });
+  if (resp.status === 401) { onAuthRequired(); await loadIncidents(); return; }
   if (resp.ok) { await loadIncidents(); scheduleRoute(0); }
 }
 
 async function deleteIncident(id) {
   if (!confirm('Delete this incident?')) return;
-  const resp = await fetch('/incidents/' + id, { method: 'DELETE' });
+  const resp = await fetch('/incidents/' + id, { method: 'DELETE', headers: authHeaders() });
+  if (resp.status === 401) { onAuthRequired(); await loadIncidents(); return; }
   if (resp.ok) { await loadIncidents(); scheduleRoute(0); }
 }
 
 // popup on incident click
 map.on('click', 'incidents-fill', function (e) {
-  if (drawing) return;
+  if (drawing || editing) return;
   const p = e.features[0].properties;
-  new maplibregl.Popup({ closeButton: true })
+  incidentPopup = new maplibregl.Popup({ closeButton: true })
     .setLngLat(e.lngLat)
     .setHTML('<b>' + esc(p.type) + '</b> — ' + esc(p.description || '') + '<br>' +
       '<small>' + (String(p.active) === 'true' ? 'ACTIVE' : 'inactive') + '</small><br>' +
       '<button onclick="toggleIncident(\'' + p.id + '\',' + !(String(p.active) === 'true') + ')">' +
         (String(p.active) === 'true' ? 'Deactivate' : 'Activate') + '</button> ' +
+      '<button onclick="editIncident(\'' + p.id + '\')">Edit</button> ' +
       '<button onclick="deleteIncident(\'' + p.id + '\')">Delete</button>')
     .addTo(map);
 });
@@ -1260,6 +1400,105 @@ map.on('mouseenter', 'incidents-fill', function () {
 map.on('mouseleave', 'incidents-fill', function () {
   if (!drawing) map.getCanvas().style.cursor = '';
 });
+
+// ---- authentication ------------------------------------------------------
+// Only authenticated users may create/edit/delete incidents. The token is a
+// signed bearer issued by POST /login and kept in localStorage.
+const AUTH_KEY = 'rasuwa_wrapper_token';
+
+function getToken() { return localStorage.getItem(AUTH_KEY) || ''; }
+function setToken(t) { if (t) localStorage.setItem(AUTH_KEY, t); else localStorage.removeItem(AUTH_KEY); }
+function isLoggedIn() { return !!getToken(); }
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const t = getToken();
+  if (t) h.Authorization = 'Bearer ' + t;
+  return h;
+}
+
+function renderAuthBar() {
+  const status = document.getElementById('auth-status');
+  const btn = document.getElementById('auth-btn');
+  const draw = document.getElementById('btn-draw');
+  const hint = document.getElementById('draw-hint');
+  if (isLoggedIn()) {
+    status.textContent = 'Logged in';
+    status.classList.add('on');
+    btn.textContent = 'Log out';
+    if (draw) draw.style.display = '';
+    if (hint) hint.textContent = 'Click Draw polygon, then click the map to add corners. Finish to save.';
+  } else {
+    status.textContent = 'Not logged in';
+    status.classList.remove('on');
+    btn.textContent = 'Log in';
+    if (draw) draw.style.display = 'none';
+    if (hint) hint.textContent = 'Log in to record incidents.';
+  }
+}
+
+function showLogin() {
+  document.getElementById('login-error').textContent = '';
+  document.getElementById('login-pass').value = '';
+  document.getElementById('login-modal').classList.add('open');
+  setTimeout(function () { document.getElementById('login-user').focus(); }, 0);
+}
+
+function hideLogin() { document.getElementById('login-modal').classList.remove('open'); }
+
+function toggleLogin() {
+  if (isLoggedIn()) { logout(); } else { showLogin(); }
+}
+
+function logout() {
+  setToken('');
+  renderAuthBar();
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const err = document.getElementById('login-error');
+  err.textContent = '';
+  if (!username || !password) { err.textContent = 'Enter a username and password.'; return; }
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    });
+    if (!resp.ok) { err.textContent = 'Invalid username or password.'; return; }
+    const body = await resp.json();
+    setToken(body.token);
+    hideLogin();
+    renderAuthBar();
+    document.getElementById('login-user').value = '';
+    document.getElementById('login-pass').value = '';
+  } catch (e) {
+    err.textContent = 'Login failed: ' + e.message;
+  }
+}
+
+// a protected request returned 401 -> the session is gone
+function onAuthRequired() {
+  setToken('');
+  renderAuthBar();
+  showLogin();
+}
+
+async function refreshAuthState() {
+  const t = getToken();
+  if (t) {
+    try {
+      const resp = await fetch('/auth/status', { headers: { Authorization: 'Bearer ' + t } });
+      const body = await resp.json();
+      if (!body.authenticated) setToken('');
+    } catch (e) { /* keep the token on a network hiccup */ }
+  }
+  renderAuthBar();
+}
+
+refreshAuthState();
 
 
 

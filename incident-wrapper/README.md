@@ -56,6 +56,23 @@ Details that matter:
 
 Interactive API docs at http://localhost:8000/docs.
 
+## Authentication
+
+Editing incident data requires a login. Only **authenticated** requests may
+`POST` / `PUT` / `DELETE` incidents; reads (`GET /incidents`, the map, routing,
+`/health`, `/config`) stay public.
+
+- `POST /login` with `{"username", "password"}` returns a signed bearer token
+  (HMAC-SHA256, stdlib only — no new dependencies), valid for 24 h by default.
+- `GET /auth/status` reports whether a stored token is still valid (it never
+  401s, so the dashboard can check a token on load).
+- The dashboard stores the token in `localStorage` and sends it as
+  `Authorization: Bearer <token>` on every incident mutation; a 401 logs it out
+  and reopens the login form.
+- Credentials come from `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD`
+  (default `admin` — **change it**). Rotating the password invalidates every
+  token already issued, because the signing key is derived from it.
+
 ## Tests
 
 ```bash
@@ -63,13 +80,16 @@ pip install -r requirements-dev.txt     # pytest + httpx
 python -m pytest                        # from incident-wrapper/
 ```
 
-56 tests, ~0.5 s. They never touch your real data: `tests/conftest.py` points
-`INCIDENTS_DB` at a temp file and injects a dummy `BAATO_KEY` **before** importing
-`app` (both are read at import time), and every test starts with an empty table.
+69 tests, ~0.9 s. They never touch your real data: `tests/conftest.py` points
+`INCIDENTS_DB` at a temp file and injects a dummy `BAATO_KEY` plus fixed
+`ADMIN_USERNAME`/`ADMIN_PASSWORD` **before** importing `app` (all are read at
+import time), and every test starts with an empty table. The `client` fixture is
+already authenticated; `anon_client` exercises the 401 paths.
 
 | File | Covers |
 |---|---|
 | `tests/test_incidents.py` | CRUD, 404s, partial updates, ring auto-closing, rejection of <3-point rings, and that geometry really is JSON in a TEXT column |
+| `tests/test_auth.py` | login success/failure, every mutation 401s without a token (or with a garbage/expired one), valid tokens allow writes, and public endpoints stay open |
 | `tests/test_baato_proxy.py` | the key never leaves the server: `/config` returns only a boolean, `_scrub_baato_url()` rewrites the key-bearing source, `/baato/style/*` output is asserted key-free, the tile proxy appends the key and does **not** echo `Content-Encoding`, plus 404/503/502 paths |
 | `tests/test_route.py` | incident→custom-model injection (`multiply_by: 0`), area-id sanitising, `lat,lon` → `[lon,lat]` flipping and point order, `custom_model` validation, and live-GraphHopper checks |
 
@@ -213,6 +233,9 @@ Environment variables:
 | `GRAPHOPPER_URL` | `http://localhost:8989`                | upstream GraphHopper base URL |
 | `INCIDENTS_DB` | `./incidents.db` (next to app.py)        | SQLite file for incidents    |
 | `PORT`         | `8000`                                   | listen port                  |
+| `ADMIN_USERNAME` | `admin`                                | login username               |
+| `ADMIN_PASSWORD` | `admin`                                | login password — **change it** |
+| `TOKEN_TTL_HOURS` | `24`                                  | login session lifetime       |
 
 ## Record an incident
 
