@@ -36,7 +36,6 @@ const BASEMAPS = {
   }
 };
 
-const LS_KEY = 'gh_dashboard_layers_v1';
 const LS_BASE = 'gh_dashboard_base';
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
@@ -72,27 +71,10 @@ function initialRasterBase() {
 }
 
 let activeBase = initialRasterBase();   // may be null until the real base resolves
-let overlays = [];               // [{id,name,kind,url,tileSize,maxzoom,attribution,encoding,visible,opacity}]
 let terrainSourceId = 'dem-mapterhorn';
 let currentVector = false;       // is the active basemap a vector style?
 let baatoConfigured = false;     // does the server hold a BAATO_KEY?
 let lastRouteGeoJSON = null;     // survives a style rebuild
-
-function loadOverlays() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) overlays = JSON.parse(raw) || [];
-  } catch (e) { overlays = []; }
-  // anything restored from storage is by definition saved
-  overlays.forEach(function (o) { o.saved = true; });
-}
-// Only opted-in layers are written; session-only ones stay in memory.
-function saveOverlays() {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(overlays.filter(function (o) { return o.saved; })));
-  } catch (e) {}
-}
-loadOverlays();
 
 // ---- style --------------------------------------------------------------
 function baseSourceDef(def) {
@@ -208,9 +190,7 @@ map.on('load', async function () {
   // so adding the control at script top level would run before it exists.
   map.addControl(new BasemapSwitcher(), 'bottom-left');
   applyTerrain();
-  restoreOverlayLayers();
   renderBaseList();
-  renderOverlayList();
   loadIncidents();
   bindLayerFormUI();
   renderWaypoints();
@@ -275,7 +255,6 @@ function rebuildStyle(vs) {
       done = true;
       map.off('style.load', finish);
       map.off('idle', finish);
-      restoreOverlayLayers();
       setIncidentSourceData();
       if (lastRouteGeoJSON && map.getSource('route')) map.getSource('route').setData(lastRouteGeoJSON);
       if (drawing) updateDraft();
@@ -399,170 +378,7 @@ BasemapSwitcher.prototype.onAdd = function (m) {
 };
 BasemapSwitcher.prototype.onRemove = function () { this._c.remove(); };
 
-// ---- overlays -----------------------------------------------------------
-function overlaySourceDef(o) {
-  if (o.kind === 'dem') {
-    return { type: 'raster-dem', tiles: [o.url], encoding: o.encoding || 'terrarium',
-             tileSize: o.tileSize, maxzoom: o.maxzoom, attribution: o.attribution || undefined };
-  }
-  return { type: 'raster', tiles: [o.url], tileSize: o.tileSize,
-           maxzoom: o.maxzoom, attribution: o.attribution || undefined };
-}
-
-// DEM overlays are terrain candidates only — they get no visible raster layer.
-function addOverlayLayers(o) {
-  const sid = 'ov-' + o.id;
-  if (map.getSource(sid)) return;
-  map.addSource(sid, overlaySourceDef(o));
-  if (o.kind === 'dem') return;
-  map.addLayer({
-    id: sid, type: 'raster', source: sid,
-    layout: { visibility: o.visible ? 'visible' : 'none' },
-    paint: { 'raster-opacity': o.opacity }
-  }, 'hillshade');
-}
-
-function restoreOverlayLayers() {
-  overlays.forEach(addOverlayLayers);
-}
-
-function addLayerFromForm() {
-  const errEl = document.getElementById('l-error');
-  errEl.style.display = 'none';
-  const name = document.getElementById('l-name').value.trim();
-  const kind = document.getElementById('l-type').value;
-  let url = document.getElementById('l-url').value.trim();
-  const tileSize = parseInt(document.getElementById('l-tilesize').value, 10) || 256;
-  const maxzoom = parseInt(document.getElementById('l-maxzoom').value, 10) || 19;
-  const attribution = document.getElementById('l-attr').value.trim();
-  const encoding = document.getElementById('l-enc').value;
-
-  function fail(msg) { errEl.textContent = msg; errEl.style.display = 'block'; }
-
-  if (!name) return fail('Give the layer a name.');
-  if (!url) return fail('URL is required.');
-  if (!/^https?:\/\//i.test(url)) return fail('URL must start with http:// or https://');
-
-  if (kind === 'wms') {
-    const wmsLayers = document.getElementById('l-wms-layers').value.trim();
-    if (!wmsLayers) return fail('WMS needs a layer name.');
-    const sep = url.indexOf('?') === -1 ? '?' : '&';
-    url = url + sep + 'service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857' +
-      '&transparent=true&format=image/png&width=256&height=256' +
-      '&layers=' + encodeURIComponent(wmsLayers) + '&bbox={bbox-epsg-3857}';
-  } else if (!/\{z\}/.test(url) || !/\{x\}/.test(url) || !/\{y\}/.test(url)) {
-    return fail('XYZ/DEM URL must contain {z}, {x} and {y}.');
-  }
-
-  const o = {
-    id: 'l' + Date.now().toString(36),
-    name: name, kind: kind, url: url, tileSize: tileSize, maxzoom: maxzoom,
-    attribution: attribution, encoding: encoding, visible: true, opacity: 1,
-    saved: document.getElementById('l-persist').checked
-  };
-  overlays.push(o);
-  saveOverlays();
-  addOverlayLayers(o);
-  renderOverlayList();
-  document.getElementById('l-name').value = '';
-  document.getElementById('l-url').value = '';
-  document.getElementById('l-wms-layers').value = '';
-}
-
-function toggleOverlay(id) {
-  const o = overlays.find(function (x) { return x.id === id; });
-  if (!o || o.kind === 'dem') return;
-  o.visible = !o.visible;
-  saveOverlays();
-  map.setLayoutProperty('ov-' + id, 'visibility', o.visible ? 'visible' : 'none');
-  renderOverlayList();
-}
-
-function setOverlayOpacity(id, v) {
-  const o = overlays.find(function (x) { return x.id === id; });
-  if (!o || o.kind === 'dem') return;
-  o.opacity = parseFloat(v);
-  saveOverlays();
-  map.setPaintProperty('ov-' + id, 'raster-opacity', o.opacity);
-}
-
-function removeOverlay(id) {
-  const o = overlays.find(function (x) { return x.id === id; });
-  if (!o) return;
-  const sid = 'ov-' + id;
-  if (terrainSourceId === sid) {           // fall back before pulling the source
-    terrainSourceId = 'dem-mapterhorn';
-    applyTerrain();
-  }
-  if (map.getLayer(sid)) map.removeLayer(sid);
-  if (map.getSource(sid)) map.removeSource(sid);
-  overlays = overlays.filter(function (x) { return x.id !== id; });
-  saveOverlays();
-  renderOverlayList();
-}
-
-function useAsBase(id) {
-  const o = overlays.find(function (x) { return x.id === id; });
-  if (!o || o.kind === 'dem') return;
-  BASEMAPS['custom-' + o.id] = {
-    name: o.name + ' (added)', tiles: [o.url], tileSize: o.tileSize,
-    maxzoom: o.maxzoom, attribution: o.attribution
-  };
-  setBasemap('custom-' + o.id);
-}
-
-function setOverlaySaved(id, saved) {
-  const o = overlays.find(function (x) { return x.id === id; });
-  if (!o) return;
-  o.saved = saved;
-  saveOverlays();
-  renderOverlayList();
-}
-
-function renderOverlayList() {
-  const el = document.getElementById('ovlist');
-  if (!overlays.length) { el.innerHTML = '<div class="empty">None added yet.</div>'; return; }
-  el.innerHTML = overlays.map(function (o) {
-    const isDem = o.kind === 'dem';
-    return '<div class="ov">' +
-      '<div class="top">' +
-        (isDem ? '' : '<input type="checkbox"' + (o.visible ? ' checked' : '') +
-          ' onchange="toggleOverlay(\'' + o.id + '\')">') +
-        '<span class="nm">' + esc(o.name) + '</span>' +
-        '<span class="kind">' + o.kind.toUpperCase() + '</span>' +
-        '<span class="sv ' + (o.saved ? 'saved">SAVED' : 'session">SESSION') + '</span>' +
-      '</div>' +
-      (isDem ? '' :
-        '<div class="rng" style="margin-top:5px"><input type="range" min="0" max="1" step="0.05" value="' + o.opacity +
-        '" oninput="setOverlayOpacity(\'' + o.id + '\', this.value)"></div>') +
-      '<div class="acts">' +
-        (isDem
-          ? '<button onclick="setTerrainSource(\'ov-' + o.id + '\')">Use for terrain</button>'
-          : '<button onclick="useAsBase(\'' + o.id + '\')">Use as base</button>') +
-        (o.saved
-          ? '<button onclick="setOverlaySaved(\'' + o.id + '\', false)">Forget</button>'
-          : '<button onclick="setOverlaySaved(\'' + o.id + '\', true)">Save locally</button>') +
-        '<button class="danger" onclick="removeOverlay(\'' + o.id + '\')">Remove</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-function setTerrainSource(sid) {
-  terrainSourceId = sid;
-  applyTerrain();
-}
-
 function bindLayerFormUI() {
-  document.getElementById('l-type').addEventListener('change', function () {
-    const v = this.value;
-    document.getElementById('wms-extra').style.display = (v === 'wms') ? 'block' : 'none';
-    document.getElementById('dem-extra').style.display = (v === 'dem') ? 'block' : 'none';
-    document.getElementById('l-url-label').textContent = (v === 'wms') ? 'WMS base URL' : 'URL template';
-    document.getElementById('l-url').placeholder = (v === 'wms')
-      ? 'https://host/geoserver/wms' : 'https://host/{z}/{x}/{y}.png';
-    document.getElementById('l-tilesize').value = (v === 'dem') ? 512 : 256;
-  });
   document.getElementById('terrain-on').addEventListener('change', applyTerrain);
   document.getElementById('hillshade-on').addEventListener('change', setHillshade);
   document.getElementById('exag').addEventListener('input', function () {
@@ -1499,6 +1315,3 @@ async function refreshAuthState() {
 }
 
 refreshAuthState();
-
-
-

@@ -294,47 +294,6 @@
     <div class="sec">Base layer</div>
     <div id="base-notice" style="display:none;font-size:11px;color:#b34700;background:#fff5e6;border:1px solid #ffd9a8;border-radius:4px;padding:6px 8px;margin-bottom:6px"></div>
     <div id="baselist" class="baselist"></div>
-
-    <div class="sec">Tile layers</div>
-    <div id="ovlist"><div class="empty">None added yet.</div></div>
-
-    <div class="sec">Add a tile layer</div>
-    <label for="l-name">Name</label>
-    <input id="l-name" type="text" placeholder="My layer">
-    <label for="l-type">Type</label>
-    <select id="l-type">
-      <option value="xyz">XYZ raster tiles</option>
-      <option value="wms">WMS</option>
-      <option value="dem">Terrain / DEM (raster-dem)</option>
-    </select>
-    <label for="l-url" id="l-url-label">URL template</label>
-    <input id="l-url" type="text" placeholder="https://host/{z}/{x}/{y}.png">
-    <div id="wms-extra" style="display:none">
-      <label for="l-wms-layers">WMS layers</label>
-      <input id="l-wms-layers" type="text" placeholder="layer1,layer2">
-    </div>
-    <div id="dem-extra" style="display:none">
-      <label for="l-enc">DEM encoding</label>
-      <select id="l-enc">
-        <option value="terrarium">terrarium</option>
-        <option value="mapbox">mapbox</option>
-      </select>
-    </div>
-    <div class="row2">
-      <div>
-        <label for="l-tilesize">Tile size</label>
-        <input id="l-tilesize" type="number" value="256" min="64" max="1024" step="64">
-      </div>
-      <div>
-        <label for="l-maxzoom">Max zoom</label>
-        <input id="l-maxzoom" type="number" value="19" min="1" max="24">
-      </div>
-    </div>
-    <label for="l-attr">Attribution (optional)</label>
-    <input id="l-attr" type="text" placeholder="&copy; Provider">
-    <label class="check"><input id="l-persist" type="checkbox" checked> Save locally for future sessions</label>
-    <button class="primary" onclick="addLayerFromForm()">Add layer</button>
-    <div id="l-error" style="display:none;color:#d63031;font-size:12px;margin-top:8px"></div>
   </div>
 
   <div id="modal">
