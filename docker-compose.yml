@@ -28,28 +28,4 @@ services:
       start_period: 300s
     restart: unless-stopped
 
-  wrapper:
-    build: ./incident-wrapper
-    image: graphhopper-incident-wrapper:latest
-    container_name: graphhopper-incident-wrapper
-    ports:
-      - "8000:8000"   # dashboard at /, API at /incidents + /route, docs at /docs
-    volumes:
-      # Incident DB lives on the host so closures survive rebuilds.
-      # A directory (not a single file) — a single-file bind mount would be
-      # created as a *directory* by Docker on a fresh clone, and SQLite needs to
-      # write its journal alongside the db.
-      - ./incident-wrapper/data:/data
-    environment:
-      # Reach GraphHopper by service name over the compose network, not localhost.
-      GRAPHOPPER_URL: "http://graphhopper:8989"
-      INCIDENTS_DB: "/data/incidents.db"
-    # BAATO_KEY comes from the gitignored .env; the file is optional so the stack
-    # still starts without a key (the dashboard falls back to Esri imagery).
-    env_file:
-      - path: ./incident-wrapper/.env
-        required: false
-    depends_on:
-      graphhopper:
-        condition: service_started
-    restart: unless-stopped
+
