@@ -189,7 +189,15 @@ def test_apply_incidents_false_sends_no_model(client, monkeypatch, make_incident
 def test_health_reports_upstream(client):
     body = client.get("/health").json()
     assert body["status"] == "ok"
+    assert body["version"] == app_module.APP_VERSION
     assert body["upstream"] == app_module.GRAPHOPPER_URL
+
+
+def test_health_reports_version_without_upstream(anon_client):
+    # /health never calls upstream — the version banner must work standalone.
+    body = anon_client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["version"] == app_module.APP_VERSION
 
 
 @needs_gh

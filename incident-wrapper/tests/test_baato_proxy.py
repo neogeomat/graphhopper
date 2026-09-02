@@ -162,6 +162,18 @@ def test_style_keeps_localhost_on_http(client, monkeypatch):
     assert style["sources"]["with_url"]["url"].startswith("http://testserver/baato/api/")
 
 
+def test_style_preserves_non_default_port(client, monkeypatch):
+    # A local server on a non-default port (e.g. :8000) must keep the port in the
+    # proxied tile URL, otherwise the browser fetches http://localhost/baato/api/
+    # and the request is refused (regression).
+    monkeypatch.setattr(requests, "get",
+                        lambda url, **kw: FakeResponse(fake_style(TEST_KEY)))
+    r = client.get("/baato/style/breeze", headers={"Host": "localhost:8000"})
+    style = r.json()
+    assert style["sources"]["qvez6ula1"]["tiles"][0].startswith(
+        "http://localhost:8000/baato/api/maps/")
+
+
 def test_unknown_style_is_404(client):
     r = client.get("/baato/style/not-a-style")
     assert r.status_code == 404

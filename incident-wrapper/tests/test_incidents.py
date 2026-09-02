@@ -18,6 +18,7 @@ def test_create_returns_201_and_generated_id(client, box):
     assert len(body["id"]) == len("inc_") + 12
     assert body["type"] == "ROAD_CLOSURE"      # documented default
     assert body["description"] == ""
+    assert body["source"] == ""                # source is optional
     assert body["active"] is True
     assert body["created_at"] == body["updated_at"]
 
@@ -119,3 +120,21 @@ def test_active_incidents_helper_filters_inactive(client, make_incident):
     active_ids = [i["id"] for i in app_module.active_incidents()]
     assert on["id"] in active_ids
     assert off["id"] not in active_ids
+
+
+def test_create_with_source_and_echo(client, make_incident):
+    inc = make_incident(description="landslide", source="Field team 3")
+    assert client.get(f"/incidents/{inc['id']}").json()["source"] == "Field team 3"
+
+
+def test_patch_source(client, make_incident):
+    inc = make_incident()
+    body = client.put(f"/incidents/{inc['id']}", json={"source": "Police report"}).json()
+    assert body["source"] == "Police report"
+    assert body["description"] == ""          # untouched
+
+
+def test_patch_source_to_blank_clears_it(client, make_incident):
+    inc = make_incident(source="old source")
+    body = client.put(f"/incidents/{inc['id']}", json={"source": ""}).json()
+    assert body["source"] == ""

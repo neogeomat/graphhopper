@@ -41,6 +41,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from shapely.geometry import LineString, MultiLineString, Point, Polygon
+from shapely.ops import nearest_points, substring
 
 GRAPHOPPER_URL = os.environ.get("GRAPHOPPER_URL", "http://localhost:8989").rstrip("/")
 BAATO_KEY = os.environ.get("BAATO_KEY", "")
@@ -52,11 +54,14 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 TOKEN_TTL_SECONDS = int(os.environ.get("TOKEN_TTL_HOURS", "24")) * 3600
 
+# Bundle/release version (kept in sync with incident-wrapper/CHANGELOG.md).
+APP_VERSION = "3.2"
+
 _LOGGER = logging.getLogger("incident-wrapper")
 if ADMIN_PASSWORD == "admin":
     _LOGGER.warning("ADMIN_PASSWORD is still the default 'admin' — set it via the environment")
 
-app = FastAPI(title="GraphHopper incident & custom-model wrapper", version="1.0.0")
+app = FastAPI(title="GraphHopper incident & custom-model wrapper", version=APP_VERSION)
 
 _db_lock = threading.Lock()
 
@@ -81,6 +86,7 @@ def _init_db():
                 id          TEXT PRIMARY KEY,
                 type        TEXT NOT NULL DEFAULT 'ROAD_CLOSURE',
                 description TEXT NOT NULL DEFAULT '',
+                source      TEXT NOT NULL DEFAULT '',
                 active      INTEGER NOT NULL DEFAULT 1,
                 coordinates TEXT NOT NULL,
                 created_at  INTEGER NOT NULL,
@@ -88,6 +94,10 @@ def _init_db():
             )
             """
         )
+        # migrate pre-source databases (older rows get an empty source)
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(incidents)")]
+        if "source" not in cols:
+            conn.execute("ALTER TABLE incidents ADD COLUMN source TEXT NOT NULL DEFAULT ''")
 
 
 _init_db()
@@ -178,6 +188,7 @@ def auth_status(authorization: Optional[str] = Header(None)):
 class IncidentIn(BaseModel):
     type: str = "ROAD_CLOSURE"
     description: str = ""
+    source: str = ""
     active: bool = True
     coordinates: List[List[float]]  # GeoJSON polygon ring, [lon, lat]
 
@@ -185,6 +196,7 @@ class IncidentIn(BaseModel):
 class IncidentPatch(BaseModel):
     type: Optional[str] = None
     description: Optional[str] = None
+    source: Optional[str] = None
     active: Optional[bool] = None
     coordinates: Optional[List[List[float]]] = None
 
@@ -194,6 +206,7 @@ def _row_to_incident(row) -> dict:
         "id": row["id"],
         "type": row["type"],
         "description": row["description"],
+        "source": row["source"],
         "active": bool(row["active"]),
         "coordinates": json.loads(row["coordinates"]),
         "created_at": row["created_at"],
@@ -254,6 +267,82 @@ def merge_custom_model(user_model, apply_incidents: bool) -> Optional[dict]:
     return cm or None
 
 
+# ---------------------------------------------------------------------------
+# reroute-section attribution — which incident rerouted which route stretch
+# ---------------------------------------------------------------------------
+REROUTE_BUFFER_M = 25.0
+_M_PER_DEG_LAT = 111_320.0
+
+
+def _meters_to_deg(meters: float, lat: float) -> float:
+    import math
+    return meters / (_M_PER_DEG_LAT * max(math.cos(math.radians(lat)), 0.2))
+
+
+def _line_pieces(geom):
+    """Yield each non-empty LineString piece of a (Multi)LineString."""
+    if geom.is_empty:
+        return
+    if isinstance(geom, MultiLineString):
+        for g in geom.geoms:
+            if not g.is_empty and g.length > 0:
+                yield g
+    elif isinstance(geom, LineString) and geom.length > 0:
+        yield geom
+
+
+def compute_reroutes(actual: list, baseline: list, incidents: list) -> list:
+    """Attribute rerouted route stretches to the incidents that caused them.
+
+    `actual` and `baseline` are [lon, lat] coordinate lists for the same
+    origin/destination — `actual` computed with incidents applied, `baseline`
+    without.  For every incident polygon that cuts the baseline, report the
+    stretch the closure would have cut (`avoided`, its two endpoints on the
+    baseline) and the stretch the actual route takes instead (`detour`).
+
+    Returns a list of::
+
+        {"incident_id", "type", "description",
+         "avoided": [[lon,lat], [lon,lat]], "detour": [[lon,lat], ...]}
+    """
+    if (not actual or len(actual) < 2 or not baseline or len(baseline) < 2
+            or not incidents):
+        return []
+    A = LineString(actual)
+    B = LineString(baseline)
+    out = []
+    for inc in incidents:
+        ring = inc.get("coordinates") or []
+        if len(ring) < 4:
+            continue
+        poly = Polygon(ring)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        mean_lat = sum(p[1] for p in ring) / len(ring)
+        # stretch of the incident-free baseline that the closure would have cut
+        cut = B.intersection(poly.buffer(_meters_to_deg(REROUTE_BUFFER_M, mean_lat)))
+        for ln in _line_pieces(cut):
+            p_start, p_end = Point(ln.coords[0]), Point(ln.coords[-1])
+            # nearest points on the detoured (actual) route anchor the detour
+            a_start = nearest_points(p_start, A)[1]
+            a_end = nearest_points(p_end, A)[1]
+            s, e = A.project(a_start), A.project(a_end)
+            if s > e:
+                s, e = e, s
+            detour_geom = substring(A, s, e)
+            detour = [list(c) for c in detour_geom.coords]
+            if detour_geom.is_empty or len(detour) < 2:
+                continue
+            out.append({
+                "incident_id": inc["id"],
+                "type": inc.get("type", "ROAD_CLOSURE"),
+                "description": inc.get("description", ""),
+                "avoided": [[p_start.x, p_start.y], [p_end.x, p_end.y]],
+                "detour": detour,
+            })
+    return out
+
+
 def _parse_user_model(raw: Optional[str]) -> Optional[dict]:
     if not raw:
         return None
@@ -291,9 +380,9 @@ def create_incident(body: IncidentIn, auth_user: str = Depends(require_auth)):
     now = int(time.time() * 1000)
     with db() as conn:
         conn.execute(
-            "INSERT INTO incidents (id, type, description, active, coordinates, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (incident_id, body.type, body.description, int(body.active), json.dumps(coords), now, now),
+            "INSERT INTO incidents (id, type, description, source, active, coordinates, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (incident_id, body.type, body.description, body.source, int(body.active), json.dumps(coords), now, now),
         )
     return _row_to_incident(_get_row(incident_id))
 
@@ -313,6 +402,9 @@ def update_incident(incident_id: str, patch: IncidentPatch, auth_user: str = Dep
     if patch.description is not None:
         fields.append("description = ?")
         values.append(patch.description)
+    if patch.source is not None:
+        fields.append("source = ?")
+        values.append(patch.source)
     if patch.active is not None:
         fields.append("active = ?")
         values.append(int(patch.active))
@@ -338,12 +430,73 @@ def delete_incident(incident_id: str, auth_user: str = Depends(require_auth)):
 # ---------------------------------------------------------------------------
 # routing wrapper
 # ---------------------------------------------------------------------------
+def _post_route(body: dict):
+    """POST a route body to GraphHopper; returns (status_code, parsed_json)."""
+    resp = requests.post(f"{GRAPHOPPER_URL}/route", json=body, timeout=300)
+    try:
+        return resp.status_code, resp.json()
+    except AttributeError:
+        # test double with .content but no .json()
+        try:
+            return resp.status_code, json.loads(resp.content or b"{}")
+        except ValueError:
+            return resp.status_code, {}
+    except ValueError:
+        return resp.status_code, {}
+
+
+def _path_coords(path: dict):
+    """[lon,lat] list from a decoded (points_encoded=false) GH path, else []."""
+    pts = (path or {}).get("points")
+    if isinstance(pts, dict) and isinstance(pts.get("coordinates"), list):
+        return pts["coordinates"]
+    return []
+
+
+def _attach_reroute_details(data: dict, body: dict, user_model: Optional[dict]):
+    """Attach per-incident reroute attribution to paths[0] in place.
+
+    Runs a second, incident-free route for the same request and diffs it
+    against the returned path.  Returns True when attribution was attached;
+    False when it could not be computed (no incidents, encoded points, or an
+    upstream failure) — the caller then passes the plain response through.
+    """
+    if not (data.get("paths") and len(data["paths"]) > 0):
+        return False
+    path0 = data["paths"][0]
+    actual_coords = _path_coords(path0)
+    incs = active_incidents()
+    if not incs or len(actual_coords) < 2:
+        return False
+    base_body = dict(body)
+    base_body["points_encoded"] = False
+    base_body["calc_points"] = True
+    base_cm = merge_custom_model(user_model, False)
+    if base_cm:
+        base_body["custom_model"] = base_cm
+    else:
+        base_body.pop("custom_model", None)
+    try:
+        status, base_data = _post_route(base_body)
+    except requests.RequestException:
+        return False
+    if status != 200:
+        return False
+    baseline_coords = _path_coords((base_data.get("paths") or [{}])[0])
+    if len(baseline_coords) < 2:
+        return False
+    path0["reroutes"] = compute_reroutes(actual_coords, baseline_coords, incs)
+    path0["baseline"] = {"type": "LineString", "coordinates": baseline_coords}
+    return True
+
+
 @app.get("/route")
 def route_get(
     point: List[str] = Query(..., description="lat,lon (repeatable), e.g. ?point=27.71,85.32&point=28.21,83.99"),
     profile: str = Query("car"),
     custom_model: Optional[str] = Query(None, description="URL-encoded custom_model JSON"),
     apply_incidents: bool = Query(True),
+    reroute_details: bool = Query(False, description="diff against an incident-free route and report per-incident rerouted stretches"),
     details: Optional[List[str]] = Query(None),
     instructions: bool = Query(True),
     calc_points: bool = Query(True),
@@ -382,26 +535,42 @@ def route_get(
     if snap_prevention:
         body["snap_preventions"] = snap_prevention
 
-    cm = merge_custom_model(_parse_user_model(custom_model), apply_incidents)
+    user_model = _parse_user_model(custom_model)
+    cm = merge_custom_model(user_model, apply_incidents)
     if cm:
         body["custom_model"] = cm
 
-    resp = requests.post(f"{GRAPHOPPER_URL}/route", json=body, timeout=300)
-    return _forward(resp)
+    # attribution needs decoded coordinates from both runs
+    if reroute_details and apply_incidents:
+        body["points_encoded"] = False
+        body["calc_points"] = True
+    status, data = _post_route(body)
+    if reroute_details and apply_incidents:
+        _attach_reroute_details(data, body, user_model)
+    return Response(content=json.dumps(data), status_code=status,
+                    media_type="application/json")
 
 
 @app.post("/route")
-def route_post(payload: dict = Body(...), apply_incidents: bool = Query(True)):
-    cm = merge_custom_model(payload.get("custom_model"), apply_incidents)
+def route_post(payload: dict = Body(...), apply_incidents: bool = Query(True),
+               reroute_details: bool = Query(False)):
+    user_model = payload.get("custom_model")
+    cm = merge_custom_model(user_model, apply_incidents)
     if cm:
         payload["custom_model"] = cm
-    resp = requests.post(f"{GRAPHOPPER_URL}/route", json=payload, timeout=300)
-    return _forward(resp)
+    if reroute_details and apply_incidents:
+        payload["points_encoded"] = False
+        payload["calc_points"] = True
+    status, data = _post_route(payload)
+    if reroute_details and apply_incidents:
+        _attach_reroute_details(data, payload, user_model)
+    return Response(content=json.dumps(data), status_code=status,
+                    media_type="application/json")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "upstream": GRAPHOPPER_URL}
+    return {"status": "ok", "version": APP_VERSION, "upstream": GRAPHOPPER_URL}
 
 
 @app.get("/config")
@@ -445,12 +614,15 @@ def _proxy_base(request: Request) -> str:
     plain local development stays on http.
     """
     scheme = request.headers.get("x-forwarded-proto", "").strip()
-    host = request.headers.get("x-forwarded-host", "").strip() or request.url.hostname
+    # netloc keeps host:port — a local dev server on a non-default port must not
+    # lose the port, or the browser fetches http://localhost/baato/api/... (refused).
+    host = request.headers.get("x-forwarded-host", "").strip() or request.url.netloc
     if not scheme:
         # Loopback names, plus Starlette/TestClient's synthetic 'testserver'
         # host, are local; anything else the browser reaches externally defaults
         # to https because the service is almost always TLS-terminated there.
-        is_local = host in ("localhost", "127.0.0.1", "::1", "testserver")
+        hostname = host.split(":")[0] if host and not host.startswith("[") else host
+        is_local = hostname in ("localhost", "127.0.0.1", "::1", "testserver")
         scheme = "http" if is_local else "https"
     return f"{scheme}://{host}"
 

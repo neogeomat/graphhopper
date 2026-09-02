@@ -16,7 +16,7 @@
     box-shadow: 0 2px 12px rgba(0,0,0,.35); z-index: 5; overflow: hidden;
   }
   #panel-routing   { right: 10px; }
-  #panel-incidents { left: 10px; width: 290px; }
+  #panel-incidents { left: 10px; width: 370px; }
   .panel.hidden .panel-body { display: none; }
   .panel-head {
     display: flex; align-items: center; gap: 8px;
@@ -61,7 +61,8 @@
   /* waypoint list */
   .wp { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
   .wp-badge {
-    width: 22px; height: 22px; flex: none; border-radius: 50%; color: #fff;
+    min-width: 22px; height: 22px; flex: none; border-radius: 11px; color: #fff;
+    padding: 0 6px; box-sizing: border-box;
     font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
   }
   .wp-badge.origin { background: #0984e3; }
@@ -117,18 +118,47 @@
   .incident .active-badge { font-size: 10px; color: #d63031; font-weight: 700; }
   .incident .active-badge.inactive { color: #636e72; }
   .incident .desc { font-size: 12px; color: #555; margin: 4px 0; word-break: break-word; }
+  .incident .src { font-size: 11px; color: #8a6d1d; margin: 2px 0; word-break: break-word; }
+  .incident .src b { font-weight: 600; color: #6d5a14; }
+  .incident .updated { font-size: 10px; color: #999; margin: 2px 0 4px; }
   .incident .actions { display: flex; gap: 5px; margin-top: 5px; }
   .incident button.danger { color: #d63031; border-color: #d63031; }
   .empty { padding: 18px 4px; text-align: center; color: #888; font-size: 12px; }
+
+  /* incident data disclaimer */
+  .disclaimer {
+    font-size: 11px; line-height: 1.45; color: #7a5c00;
+    background: #fff8e1; border: 1px solid #f0dfa0; border-radius: 6px;
+    padding: 8px 10px; margin: 0 0 10px;
+  }
+  .disclaimer a { color: #7a5c00; font-weight: 600; }
+  .disclaimer b { font-weight: 700; }
 
   /* route summary lives inside the routing panel */
   #result { display: none; margin: 10px -12px 0; border-top: 1px solid #eee; }
   #summary { padding: 9px 12px; font-weight: 600; font-size: 13px; background: #f0f4f8; }
   #result.busy { opacity: .55; transition: opacity .12s; }
+  /* reroute attribution legend (shown under the route summary) */
+  #reroute-legend { display: none; padding: 8px 12px; background: #fdf6ec;
+    border-bottom: 1px solid #eee; font-size: 12px; }
+  #reroute-legend .rr-head { font-weight: 700; font-size: 11px; color: #a05a00;
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  #reroute-legend .rr { display: flex; align-items: center; gap: 6px;
+    padding: 2px 0; cursor: pointer; }
+  #reroute-legend .rr:hover .txt { text-decoration: underline; }
+  #reroute-legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  #reroute-legend .ln { width: 20px; height: 5px; border-radius: 3px; flex: none;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.7); }
+  #reroute-legend .ln.red  { background: #e74c3c; }
+  #reroute-legend .ln.blue { background: #0984e3; }
+  #reroute-legend .txt { flex: 1; color: #2d3436; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #reroute-legend .km { color: #b06500; font-weight: 700; flex: none; }
 
   .marker-origin, .marker-dest, .marker-stop {
-    width: 24px; height: 24px; border-radius: 50%; color: #fff; text-align: center;
-    line-height: 24px; font-weight: 700; font-size: 12px; cursor: grab;
+    min-width: 24px; height: 24px; border-radius: 12px; color: #fff; text-align: center;
+    line-height: 20px; padding: 0 6px; box-sizing: border-box;
+    font-weight: 700; font-size: 11px; cursor: grab;
     box-shadow: 0 1px 4px rgba(0,0,0,.5); border: 2px solid #fff;
   }
   .marker-origin { background: #0984e3; }
@@ -139,7 +169,7 @@
   #apptitle {
     position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
     z-index: 4; pointer-events: none; text-align: center;
-    max-width: calc(100% - 680px); min-width: 260px;
+    max-width: calc(100% - 780px); min-width: 260px;
     background: rgba(45,52,54,.9); color: #fff;
     border-radius: 8px; padding: 9px 18px;
     box-shadow: 0 2px 10px rgba(0,0,0,.35);
@@ -174,6 +204,17 @@
   #modal-card .btns { display:flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   #modal-card button { padding: 7px 14px; }
   #modal-card button.primary { width: auto; margin-top: 0; }
+
+  /* edit-incident text modal */
+  #edit-modal { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: none; align-items: center; justify-content: center; }
+  #edit-modal.open { display: flex; }
+  #edit-card { background:#fff; border-radius: 8px; padding: 18px; width: 320px; box-shadow: 0 4px 24px rgba(0,0,0,.4); }
+  #edit-card h3 { margin: 0 0 12px; font-size: 15px; }
+  #edit-card label { display: block; font-size: 11px; color: #636e72; margin: 8px 0 3px; }
+  #edit-card select, #edit-card input { width: 100%; padding: 6px 8px; font-size: 13px; }
+  #edit-card .btns { display:flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #edit-card button { padding: 7px 14px; }
+  #edit-card button.primary { width: auto; margin-top: 0; }
 
   /* auth / login */
   #authbar { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
@@ -231,6 +272,7 @@
       <span class="chev">&#9662;</span>
     </div>
     <div class="panel-body">
+      <div class="disclaimer"><b>Disclaimer:</b> Incident information is collected from various sources and may not be up to date. Help keep it accurate by reporting new updates at <a href="https://www.facebook.com/baatomaps/" target="_blank" rel="noopener">facebook.com/baatomaps</a> or <a href="https://www.instagram.com/baatomaps/" target="_blank" rel="noopener">instagram.com/baatomaps</a>.</div>
       <div id="authbar">
         <span id="auth-status" class="auth-status">Not logged in</span>
         <button id="auth-btn" type="button" onclick="toggleLogin()">Log in</button>
@@ -271,6 +313,7 @@
       <div id="error"></div>
       <div id="result">
         <div id="summary"></div>
+        <div id="reroute-legend"></div>
       </div>
     </div>
   </div>
@@ -278,7 +321,7 @@
   <!-- ---------- LAYERS (moved into the map control on load) ---------- -->
   <div id="layers-content">
     <div class="sec">3D terrain</div>
-    <label class="check"><input id="terrain-on" type="checkbox" checked> Enable 3D terrain</label>
+    <label class="check"><input id="terrain-on" type="checkbox"> Enable 3D terrain</label>
     <label for="exag">Exaggeration</label>
     <div class="rng">
       <input id="exag" type="range" min="0" max="3" step="0.1" value="1.4">
@@ -286,10 +329,10 @@
     </div>
     <label for="pitch">Pitch</label>
     <div class="rng">
-      <input id="pitch" type="range" min="0" max="85" step="1" value="60">
-      <span id="pitch-val">60&deg;</span>
+      <input id="pitch" type="range" min="0" max="85" step="1" value="0">
+      <span id="pitch-val">0&deg;</span>
     </div>
-    <label class="check"><input id="hillshade-on" type="checkbox" checked> Hillshade</label>
+    <label class="check"><input id="hillshade-on" type="checkbox"> Hillshade</label>
 
     <div class="sec">Base layer</div>
     <div id="base-notice" style="display:none;font-size:11px;color:#b34700;background:#fff5e6;border:1px solid #ffd9a8;border-radius:4px;padding:6px 8px;margin-bottom:6px"></div>
@@ -309,9 +352,33 @@
       </select>
       <label for="inc-desc">Description</label>
       <input id="inc-desc" type="text" placeholder="e.g. Bridge collapse on Ring Road">
+      <label for="inc-source">Source (optional)</label>
+      <input id="inc-source" type="text" placeholder="e.g. Police report, field team, social media">
       <div class="btns">
         <button onclick="cancelModal()">Cancel</button>
         <button class="primary" onclick="saveIncident()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="edit-modal">
+    <div id="edit-card">
+      <h3>Edit incident</h3>
+      <label for="edit-inc-type">Type</label>
+      <select id="edit-inc-type">
+        <option value="ROAD_CLOSURE">Road closure</option>
+        <option value="ACCIDENT">Accident</option>
+        <option value="CONSTRUCTION">Construction</option>
+        <option value="HAZARD">Hazard</option>
+        <option value="OTHER">Other</option>
+      </select>
+      <label for="edit-inc-desc">Description</label>
+      <input id="edit-inc-desc" type="text" placeholder="e.g. Bridge collapse on Ring Road">
+      <label for="edit-inc-source">Source (optional)</label>
+      <input id="edit-inc-source" type="text" placeholder="e.g. Police report, field team, social media">
+      <div class="btns">
+        <button onclick="cancelEditText()">Cancel</button>
+        <button class="primary" onclick="saveIncidentText()">Save</button>
       </div>
     </div>
   </div>
@@ -333,9 +400,9 @@
   </div>
 
   <div id="ctxmenu">
-    <button type="button" onclick="ctxAction('origin')">Set as origin (A)</button>
-    <button type="button" onclick="ctxAction('stop')">Add stop</button>
-    <button type="button" onclick="ctxAction('dest')">Set as destination (B)</button>
+    <button type="button" onclick="ctxAction('origin')">Set as origin (From)</button>
+    <button type="button" onclick="ctxAction('stop')">Add intermediate stop</button>
+    <button type="button" onclick="ctxAction('dest')">Set as destination (To)</button>
     <div class="ctx-sep"></div>
     <button type="button" class="ctx-danger" onclick="ctxAction('clear')">Clear all points</button>
   </div>

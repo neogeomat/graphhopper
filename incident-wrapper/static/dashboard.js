@@ -97,11 +97,15 @@ function buildStyle(vs) {
   sources.incidents = { type: 'geojson', data: EMPTY_FC };
   sources.draft = { type: 'geojson', data: EMPTY_FC };
   sources.route = { type: 'geojson', data: EMPTY_FC };
+  sources['reroute-baseline'] = { type: 'geojson', data: EMPTY_FC };
 
   const hillshadeLayer = {
     id: 'hillshade', type: 'hillshade', source: 'dem-hillshade',
     paint: { 'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#5c6b7a' }
   };
+  // Reroute comparison: the incident-free route is drawn in RED below the blue
+  // incidents-applied route, so blue covers red wherever they overlap and the
+  // old path only shows where the new route actually detours.
   const overlayLayers = [
     { id: 'incidents-fill', type: 'fill', source: 'incidents',
       paint: { 'fill-color': incidentColorExpr(), 'fill-opacity': 0.35 } },
@@ -116,6 +120,9 @@ function buildStyle(vs) {
     { id: 'draft-vertex', type: 'circle', source: 'draft',
       filter: ['==', ['geometry-type'], 'Point'],
       paint: { 'circle-radius': 5, 'circle-color': '#fff', 'circle-stroke-color': '#00b894', 'circle-stroke-width': 2 } },
+    { id: 'reroute-baseline', type: 'line', source: 'reroute-baseline',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#e74c3c', 'line-width': 6 } },
     { id: 'route-casing', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } },
@@ -172,7 +179,7 @@ const map = new maplibregl.Map({
   style: buildStyle(),
   center: [85.3240, 27.7172],
   zoom: 12,
-  pitch: 60,        // tilt, for the 3D terrain
+  pitch: 0,         // flat by default; terrain/hillshade are opt-in
   bearing: 0,       // north up — no rotation
   maxPitch: 85,
   hash: false
@@ -257,6 +264,9 @@ function rebuildStyle(vs) {
       map.off('idle', finish);
       setIncidentSourceData();
       if (lastRouteGeoJSON && map.getSource('route')) map.getSource('route').setData(lastRouteGeoJSON);
+      if (lastBaselineFC && map.getSource('reroute-baseline')) {
+        map.getSource('reroute-baseline').setData(lastBaselineFC);
+      }
       if (drawing) updateDraft();
       applyTerrain();
       setHillshade();
@@ -477,7 +487,9 @@ function wpRole(i) {
 }
 function wpLabel(i) {
   const r = wpRole(i);
-  return r === 'origin' ? 'A' : (r === 'dest' ? 'B' : String(i));
+  if (r === 'origin') return 'From';
+  if (r === 'dest') return 'To';
+  return 'Intermediate ' + i;
 }
 
 function parsePoint(v) {
@@ -512,10 +524,11 @@ function makeMarker(w) {
 function refreshMarkers() {
   waypoints.forEach(function (w, i) {
     const el = w.marker.getElement();
-    el.className = 'marker-' + wpRole(i);
+    // keep MapLibre's own marker class — without it the pill loses
+    // position:absolute and stretches across the whole map width
+    el.className = 'maplibregl-marker marker-' + wpRole(i);
     el.textContent = wpLabel(i);
-    el.title = wpRole(i) === 'stop' ? 'Stop ' + wpLabel(i) + ' — right-click to remove'
-                                   : wpLabel(i) + ' — right-click to remove';
+    el.title = wpLabel(i) + ' — right-click to remove';
   });
 }
 
@@ -616,6 +629,7 @@ async function editWaypoint(i, value) {
     if (!waypoints[i]) return;                  // removed while we were waiting
     moveWaypoint(i, hit);
     afterWaypointChange();
+    zoomToPlace(hit.lat, hit.lng);
     geoStatus('“' + hit.name + '” → ' + wpLabel(i));
   } catch (e) {
     geoStatus('Could not find “' + v + '”: ' + e.message, true);
@@ -646,8 +660,10 @@ function clearPoints() {
   waypoints.forEach(function (w) { w.marker.remove(); });
   waypoints = [];
   lastRouteGeoJSON = null;
+  lastBaselineFC = null;
   haveRoute = false;
   if (map.getSource('route')) map.getSource('route').setData(EMPTY_FC);
+  clearRerouteLayers();
   document.getElementById('result').style.display = 'none';
   document.getElementById('result').classList.remove('busy');
   document.getElementById('summary').textContent = '';
@@ -658,9 +674,9 @@ function clearPoints() {
 
 function updateHint() {
   const h = document.getElementById('hint');
-  if (!waypoints.length) h.textContent = 'Right-click the map to set the origin (A).';
-  else if (waypoints.length === 1) h.textContent = 'Right-click the map to set the destination (B).';
-  else h.textContent = 'Right-click to add stops · drag a marker to move it · right-click a marker to remove it.';
+  if (!waypoints.length) h.textContent = 'Right-click the map to set the origin.';
+  else if (waypoints.length === 1) h.textContent = 'Right-click the map to set the destination.';
+  else h.textContent = 'Right-click to add intermediate stops · drag a marker to move it · right-click a marker to remove it.';
 }
 
 // ---- right-click context menu -------------------------------------------
@@ -773,12 +789,17 @@ function renderGeoResults() {
       '<div class="g-bot">' +
         (r.type ? '<span class="g-ty">' + esc(r.type) + '</span>' : '') +
         '<span class="g-km">' + km + '</span>' +
-        '<button type="button" class="g-a" title="Set as origin"      onclick="geoPick(' + i + ',\'origin\')">A</button>' +
-        '<button type="button" class="g-s" title="Add as stop"        onclick="geoPick(' + i + ',\'stop\')">+</button>' +
-        '<button type="button" class="g-b" title="Set as destination" onclick="geoPick(' + i + ',\'dest\')">B</button>' +
+        '<button type="button" class="g-a" title="Set as origin"      onclick="geoPick(' + i + ',\'origin\')">From</button>' +
+        '<button type="button" class="g-s" title="Add as intermediate" onclick="geoPick(' + i + ',\'stop\')">+</button>' +
+        '<button type="button" class="g-b" title="Set as destination" onclick="geoPick(' + i + ',\'dest\')">To</button>' +
       '</div>' +
     '</div>';
   }).join('');
+}
+
+/** Fly the viewport to a freshly geocoded point so the user sees where it landed. */
+function zoomToPlace(lat, lng) {
+  map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 700 });
 }
 
 /** Resolve a search hit to coordinates and drop it in as a waypoint. */
@@ -790,10 +811,7 @@ async function geoPick(idx, kind) {
     const hit = await placeCentroid(r.placeId, r.name);
     setWaypoint(kind, hit);
     geoStatus('Added “' + hit.name + '”.');
-    // bring it into view when it would otherwise be off-screen
-    if (!map.getBounds().contains([hit.lng, hit.lat])) {
-      map.easeTo({ center: [hit.lng, hit.lat], duration: 700 });
-    }
+    zoomToPlace(hit.lat, hit.lng);
   } catch (e) {
     geoStatus('Could not locate that place: ' + e.message, true);
   }
@@ -850,7 +868,9 @@ async function runRoute(opts) {
     url.searchParams.set('profile', document.getElementById('profile').value);
     url.searchParams.set('points_encoded', 'false');
     url.searchParams.set('instructions', 'true');
-    url.searchParams.set('apply_incidents', String(document.getElementById('apply').checked));
+    const applyInc = document.getElementById('apply').checked;
+    url.searchParams.set('apply_incidents', String(applyInc));
+    if (applyInc) url.searchParams.set('reroute_details', 'true');
 
     if (haveRoute) result.classList.add('busy');
     const resp = await fetch(url);
@@ -868,13 +888,94 @@ async function runRoute(opts) {
     result.classList.remove('busy');
     // drop the stale line so the map never shows a route that no longer applies
     lastRouteGeoJSON = null;
+    lastBaselineFC = null;
     haveRoute = false;
     if (map.getSource('route')) map.getSource('route').setData(EMPTY_FC);
+    clearRerouteLayers();
     document.getElementById('result').style.display = 'none';
     document.getElementById('summary').textContent = '';
     showError('Routing failed: ' + e.message);
     showAlert(routeFailureMessage(e.message));
   }
+}
+
+// ---- reroute comparison display -----------------------------------------
+let lastBaselineFC = null;       // incident-free route (drawn red, under blue)
+
+function rerouteKm(coords) {
+  // rough length of a [lon,lat] path in km (haversine)
+  const R = 6371;
+  let km = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1], b = coords[i];
+    const dLat = (b[1] - a[1]) * Math.PI / 180;
+    const dLon = (b[0] - a[0]) * Math.PI / 180;
+    const la1 = a[1] * Math.PI / 180, la2 = b[1] * Math.PI / 180;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+    km += 2 * R * Math.asin(Math.sqrt(h));
+  }
+  return km;
+}
+
+function fcLine(coords) {
+  return { type: 'Feature', properties: {},
+    geometry: { type: 'LineString', coordinates: coords } };
+}
+
+// Older, incident-free route goes in red under the blue incidents route.
+// Where both run the same road, the blue line (with its white casing) covers
+// the red one; the red old path only peeks out where the new route detours.
+function drawReroutes(path) {
+  const coords = (path.baseline && path.baseline.coordinates) || [];
+  lastBaselineFC = coords.length >= 2 ? { type: 'FeatureCollection', features: [fcLine(coords)] } : null;
+  if (map.getSource('reroute-baseline')) {
+    map.getSource('reroute-baseline').setData(lastBaselineFC || EMPTY_FC);
+  }
+  renderRerouteLegend(!!lastBaselineFC, path.reroutes || []);
+}
+
+function clearRerouteLayers() {
+  lastBaselineFC = null;
+  if (map.getSource('reroute-baseline')) map.getSource('reroute-baseline').setData(EMPTY_FC);
+  renderRerouteLegend(false, []);
+}
+
+function renderRerouteLegend(hasBaseline, reroutes) {
+  const box = document.getElementById('reroute-legend');
+  if (!box) return;
+  // the red/blue comparison legend only makes sense while a baseline exists
+  // AND at least one incident actually reroutes this route (otherwise red is
+  // fully covered by blue and there is nothing to explain)
+  if (!hasBaseline || !reroutes || !reroutes.length) {
+    box.style.display = 'none'; box.innerHTML = '';
+    return;
+  }
+  let html =
+    '<div class="rr-head">Route key</div>' +
+    '<div class="rr"><span class="ln red"></span><span class="txt">Blocked route (without incidents)</span></div>' +
+    '<div class="rr"><span class="ln blue"></span><span class="txt">Alternate route (with incidents)</span></div>';
+  // one row per incident (a closure can yield several detour stretches)
+  const byId = {};
+  reroutes.forEach(function (rr) {
+    const key = rr.incident_id || rr.type || '?';
+    if (!byId[key]) byId[key] = { type: rr.type, description: rr.description || rr.type, incident_id: rr.incident_id, km: 0 };
+    if (rr.detour && rr.detour.length) byId[key].km += rerouteKm(rr.detour);
+  });
+  const rows = Object.keys(byId).map(function (k) {
+    const r = byId[k];
+    return '<div class="rr" onclick="focusIncident(\'' + esc(r.incident_id || '') + '\')" title="Show incident">' +
+      '<span class="dot" style="background:' + (rerouteColor(r.type)) + '"></span>' +
+      '<span class="txt">' + esc(r.description) + '</span>' +
+      '<span class="km">+ ' + r.km.toFixed(1) + ' km</span></div>';
+  });
+  html += '<div class="rr-head">Rerouted because of</div>' + rows.join('');
+  box.innerHTML = html;
+  box.style.display = 'block';
+}
+
+function rerouteColor(type) {
+  return { ROAD_CLOSURE: '#d63031', ACCIDENT: '#e17055', CONSTRUCTION: '#f9ca24',
+    HAZARD: '#6c5ce7' }[type] || '#636e72';
 }
 
 function drawRoute(path, fit) {
@@ -885,6 +986,7 @@ function drawRoute(path, fit) {
   };
   map.getSource('route').setData(lastRouteGeoJSON);
   haveRoute = true;
+  drawReroutes(path);
   if (fit && path.bbox && path.bbox.length === 4) {
     map.fitBounds([[path.bbox[0], path.bbox[1]], [path.bbox[2], path.bbox[3]]],
       { padding: 70, pitch: map.getPitch(), duration: 700 });
@@ -955,6 +1057,7 @@ function updateDraft() {
 function finishDraw() {
   if (draft.length < 3) { alert('A polygon needs at least 3 points.'); return; }
   document.getElementById('inc-desc').value = '';
+  document.getElementById('inc-source').value = '';
   document.getElementById('inc-type').value = 'ROAD_CLOSURE';
   document.getElementById('modal').classList.add('open');
 }
@@ -968,6 +1071,7 @@ async function saveIncident() {
   const body = {
     type: document.getElementById('inc-type').value,
     description: document.getElementById('inc-desc').value.trim(),
+    source: document.getElementById('inc-source').value.trim(),
     coordinates: draft.slice()          // backend closes the ring
   };
   const resp = await fetch('/incidents', {
@@ -1134,7 +1238,7 @@ function setIncidentSourceData() {
       if (a[0] !== b[0] || a[1] !== b[1]) ring.push([a[0], a[1]]);
       return {
         type: 'Feature',
-        properties: { id: inc.id, type: inc.type, description: inc.description || '', active: !!inc.active },
+        properties: { id: inc.id, type: inc.type, description: inc.description || '', source: inc.source || '', active: !!inc.active, updated_at: inc.updated_at },
         geometry: { type: 'Polygon', coordinates: [ring] }
       };
     })
@@ -1154,15 +1258,28 @@ function renderIncidentList() {
       '<span class="active-badge ' + (inc.active ? '' : 'inactive') + '">' +
         (inc.active ? 'ACTIVE' : 'inactive') + '</span></div>' +
       '<div class="desc">' + esc(inc.description || '') + '</div>' +
+      (inc.source ? '<div class="src">Source: <b>' + esc(inc.source) + '</b></div>' : '') +
+      '<div class="updated">Updated ' + esc(fmtTime(inc.updated_at)) + '</div>' +
       '<div class="actions">' +
         '<button onclick="focusIncident(\'' + inc.id + '\')">Show</button>' +
-        '<button onclick="editIncident(\'' + inc.id + '\')">Edit</button>' +
+        '<button onclick="editIncidentText(\'' + inc.id + '\')">Edit</button>' +
+        '<button onclick="editIncident(\'' + inc.id + '\')">Shape</button>' +
         '<button onclick="toggleIncident(\'' + inc.id + '\',' + (!inc.active) + ')">' +
           (inc.active ? 'Deactivate' : 'Activate') + '</button>' +
         '<button class="danger" onclick="deleteIncident(\'' + inc.id + '\')">Delete</button>' +
       '</div>' +
     '</div>';
   }).join('');
+}
+
+/** Format an epoch-ms timestamp as a short local date-time ('' when missing). */
+function fmtTime(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return '';
+  const p = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+    ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
 const INC_COLORS = {
@@ -1189,6 +1306,43 @@ async function toggleIncident(id, active) {
   if (resp.ok) { await loadIncidents(); scheduleRoute(0); }
 }
 
+let editTextId = null;
+
+function editIncidentText(id) {
+  if (!isLoggedIn()) { showLogin(); return; }
+  const inc = INCIDENTS.find(function (x) { return x.id === id; });
+  if (!inc) return;
+  editTextId = id;
+  document.getElementById('edit-inc-type').value = inc.type || 'OTHER';
+  document.getElementById('edit-inc-desc').value = inc.description || '';
+  document.getElementById('edit-inc-source').value = inc.source || '';
+  document.getElementById('edit-modal').classList.add('open');
+}
+
+function cancelEditText() {
+  editTextId = null;
+  document.getElementById('edit-modal').classList.remove('open');
+}
+
+async function saveIncidentText() {
+  if (!editTextId) return;
+  const body = {
+    type: document.getElementById('edit-inc-type').value,
+    description: document.getElementById('edit-inc-desc').value.trim(),
+    source: document.getElementById('edit-inc-source').value.trim()
+  };
+  const resp = await fetch('/incidents/' + editTextId, {
+    method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body)
+  });
+  if (resp.status === 401) { onAuthRequired(); return; }
+  if (!resp.ok) { alert('Failed to save: ' + (await resp.text())); return; }
+  editTextId = null;
+  document.getElementById('edit-modal').classList.remove('open');
+  await loadIncidents();
+  scheduleRoute(0);                     // description/type can change the route message
+}
+
 async function deleteIncident(id) {
   if (!confirm('Delete this incident?')) return;
   const resp = await fetch('/incidents/' + id, { method: 'DELETE', headers: authHeaders() });
@@ -1203,10 +1357,13 @@ map.on('click', 'incidents-fill', function (e) {
   incidentPopup = new maplibregl.Popup({ closeButton: true })
     .setLngLat(e.lngLat)
     .setHTML('<b>' + esc(p.type) + '</b> — ' + esc(p.description || '') + '<br>' +
-      '<small>' + (String(p.active) === 'true' ? 'ACTIVE' : 'inactive') + '</small><br>' +
+      (p.source ? 'Source: <b>' + esc(p.source) + '</b><br>' : '') +
+      '<small>' + (String(p.active) === 'true' ? 'ACTIVE' : 'inactive') +
+      ' · updated ' + esc(fmtTime(p.updated_at)) + '</small><br>' +
       '<button onclick="toggleIncident(\'' + p.id + '\',' + !(String(p.active) === 'true') + ')">' +
         (String(p.active) === 'true' ? 'Deactivate' : 'Activate') + '</button> ' +
-      '<button onclick="editIncident(\'' + p.id + '\')">Edit</button> ' +
+      '<button onclick="editIncidentText(\'' + p.id + '\')">Edit</button> ' +
+      '<button onclick="editIncident(\'' + p.id + '\')">Shape</button> ' +
       '<button onclick="deleteIncident(\'' + p.id + '\')">Delete</button>')
     .addTo(map);
 });

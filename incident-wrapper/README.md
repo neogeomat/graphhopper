@@ -11,6 +11,10 @@ GraphHopper fork itself unmodified and adds two things on top:
    incident is automatically injected as a blocked polygon area
    (`priority: {if: in_<id>, multiply_by: 0}`).
 
+**Version & history:** the current release is **v3.2** — see
+[`CHANGELOG.md`](CHANGELOG.md) for per-version changes. The running build reports
+its version on `GET /health` (`{"status": "ok", "version": "3.2", …}`).
+
 ## Run
 
 Two ways — Docker (both services) or straight on the host.
@@ -80,7 +84,7 @@ pip install -r requirements-dev.txt     # pytest + httpx
 python -m pytest                        # from incident-wrapper/
 ```
 
-69 tests, ~0.9 s. They never touch your real data: `tests/conftest.py` points
+83 tests, ~1 s. They never touch your real data: `tests/conftest.py` points
 `INCIDENTS_DB` at a temp file and injects a dummy `BAATO_KEY` plus fixed
 `ADMIN_USERNAME`/`ADMIN_PASSWORD` **before** importing `app` (all are read at
 import time), and every test starts with an empty table. The `client` fixture is
@@ -88,10 +92,11 @@ already authenticated; `anon_client` exercises the 401 paths.
 
 | File | Covers |
 |---|---|
-| `tests/test_incidents.py` | CRUD, 404s, partial updates, ring auto-closing, rejection of <3-point rings, and that geometry really is JSON in a TEXT column |
+| `tests/test_incidents.py` | CRUD, 404s, partial updates, ring auto-closing, rejection of <3-point rings, the optional `source` field, and that geometry really is JSON in a TEXT column |
 | `tests/test_auth.py` | login success/failure, every mutation 401s without a token (or with a garbage/expired one), valid tokens allow writes, and public endpoints stay open |
 | `tests/test_baato_proxy.py` | the key never leaves the server: `/config` returns only a boolean, `_scrub_baato_url()` rewrites the key-bearing source, `/baato/style/*` output is asserted key-free, the tile proxy appends the key and does **not** echo `Content-Encoding`, plus 404/503/502 paths |
-| `tests/test_route.py` | incident→custom-model injection (`multiply_by: 0`), area-id sanitising, `lat,lon` → `[lon,lat]` flipping and point order, `custom_model` validation, and live-GraphHopper checks |
+| `tests/test_route.py` | incident→custom-model injection (`multiply_by: 0`), area-id sanitising, `lat,lon` → `[lon,lat]` flipping and point order, `custom_model` validation, `/health` version banner, and live-GraphHopper checks |
+| `tests/test_reroute_attribution.py` | shapely geometry diffing (which incident cut which stretch + the detour) and `/route?reroute_details=true` endpoint wiring |
 
 Tests needing a running GraphHopper are marked and **skip automatically** when
 `GRAPHOPPER_URL` is unreachable, so the suite still passes standalone. With it up
@@ -113,8 +118,14 @@ Three independent surfaces (no tabs):
 
 - **Incidents — left panel.** Click **Draw polygon**, then click the map to add
   corners (Finish / double-click / Enter to close, Cancel / Esc to abort). Saves via
-  `POST /incidents`. Saved incidents render coloured by type (grey when inactive),
-  are clickable for a popup, and are listed with show/deactivate/delete actions.
+  `POST /incidents`. The record and edit forms take an optional **source** (who
+  reported it — e.g. "Police report", "Field team 3"; may be blank); it is shown in
+  the list card and the popup. Saved incidents render coloured by type (grey when
+  inactive), are clickable for a popup, and are listed with show/edit/delete
+  actions. Each card shows the description, source, and an "Updated …" timestamp,
+  sorted newest first. A **disclaimer** at the top of the panel states that the
+  information is collected from various sources and may not be up to date, and
+  points to the Baato Facebook/Instagram pages for reporting updates.
   **Any change to the incidents layer — save, activate, deactivate, delete —
   immediately re-runs the current route.**
 - **Routing — right panel.** Starts with a **Baato place search**: type at least two
@@ -139,6 +150,12 @@ Three independent surfaces (no tabs):
   **Left-click never places routing points** — that is reserved for inspecting
   incidents and drawing polygons, so clicking an incident no longer moves the
   destination.
+  When incidents reroute the journey, the map shows the comparison: the
+  incident-free **blocked route in red underneath**, the actual **alternate route
+  in blue on top** (blue wins where they overlap), and a route-key legend lists
+  each rerouting incident with the extra distance. Internally this asks
+  GraphHopper for a second, incident-free route (`reroute_details=true`) and diffs
+  the geometries with shapely — no Java changes.
 - **Layers — the map control, bottom-left.** Click *Layers · \<current basemap\>* to
   expand terrain controls, the basemap list, the Baato key field, added layers and
   the add-a-layer form. Collapsed by default.
