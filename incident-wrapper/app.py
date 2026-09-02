@@ -433,6 +433,28 @@ def _scrub_baato_url(url: str, base: str) -> str:
     return out
 
 
+def _proxy_base(request: Request) -> str:
+    """External base URL for proxied tile URLs.
+
+    The wrapper normally sits behind a TLS-terminating reverse proxy, so
+    ``request.base_url`` reports the internal ``http://`` scheme even though
+    the browser reaches the service over ``https://``. Rewriting Baato tiles
+    to an ``http://`` URL on an https page would be blocked as mixed content,
+    which silently kills the vector (road) layers. Honour the forwarded scheme
+    when present and default to https for anything that isn't localhost; only
+    plain local development stays on http.
+    """
+    scheme = request.headers.get("x-forwarded-proto", "").strip()
+    host = request.headers.get("x-forwarded-host", "").strip() or request.url.hostname
+    if not scheme:
+        # Loopback names, plus Starlette/TestClient's synthetic 'testserver'
+        # host, are local; anything else the browser reaches externally defaults
+        # to https because the service is almost always TLS-terminated there.
+        is_local = host in ("localhost", "127.0.0.1", "::1", "testserver")
+        scheme = "http" if is_local else "https"
+    return f"{scheme}://{host}"
+
+
 @app.get("/baato/style/{style}")
 def baato_style(style: str, request: Request):
     """Fetch a Baato style server-side and strip the key out of it."""
@@ -448,7 +470,7 @@ def baato_style(style: str, request: Request):
         raise HTTPException(status_code=r.status_code, detail="Baato rejected the style request")
 
     style_json = r.json()
-    base = str(request.base_url).rstrip("/")
+    base = _proxy_base(request)
     for src in (style_json.get("sources") or {}).values():
         if isinstance(src.get("tiles"), list):
             src["tiles"] = [_scrub_baato_url(u, base) for u in src["tiles"]]

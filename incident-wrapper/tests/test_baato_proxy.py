@@ -118,6 +118,50 @@ def test_style_sends_the_key_upstream(client, monkeypatch):
     assert seen["params"]["key"] == TEST_KEY
 
 
+def test_style_defaults_keyed_tiles_to_https_behind_tls(client, monkeypatch):
+    # On a TLS-terminated deployment the wrapper only ever sees http:// inbound,
+    # so it must NOT let that leak into the proxied tile URL (mixed content would
+    # silently kill the vector/road layers). A non-localhost host => https.
+    monkeypatch.setattr(requests, "get",
+                        lambda url, **kw: FakeResponse(fake_style(TEST_KEY)))
+    r = client.get("/baato/style/breeze", headers={"Host": "rasuwaflood.baato.io"})
+    style = r.json()
+    tile = style["sources"]["qvez6ula1"]["tiles"][0]
+    assert tile.startswith("https://rasuwaflood.baato.io/baato/api/maps/")
+    url = style["sources"]["with_url"]["url"]
+    assert url.startswith("https://rasuwaflood.baato.io/baato/api/")
+
+
+def test_style_honors_forwarded_proto(client, monkeypatch):
+    monkeypatch.setattr(requests, "get",
+                        lambda url, **kw: FakeResponse(fake_style(TEST_KEY)))
+    r = client.get(
+        "/baato/style/breeze",
+        headers={"Host": "rasuwaflood.baato.io", "X-Forwarded-Proto": "http"},
+    )
+    style = r.json()
+    assert style["sources"]["qvez6ula1"]["tiles"][0].startswith(
+        "http://rasuwaflood.baato.io/baato/api/")
+    # forwarded host wins for the base
+    r2 = client.get(
+        "/baato/style/breeze",
+        headers={"Host": "internal:8000", "X-Forwarded-Host": "rasuwaflood.baato.io",
+                 "X-Forwarded-Proto": "https"},
+    )
+    assert r2.json()["sources"]["qvez6ula1"]["tiles"][0].startswith(
+        "https://rasuwaflood.baato.io/baato/api/")
+
+
+def test_style_keeps_localhost_on_http(client, monkeypatch):
+    # Local dev has no TLS; the default host in tests is 'testserver', so the
+    # fallback stays http (matches the existing end-to-end scrub test).
+    monkeypatch.setattr(requests, "get",
+                        lambda url, **kw: FakeResponse(fake_style(TEST_KEY)))
+    r = client.get("/baato/style/breeze")
+    style = r.json()
+    assert style["sources"]["with_url"]["url"].startswith("http://testserver/baato/api/")
+
+
 def test_unknown_style_is_404(client):
     r = client.get("/baato/style/not-a-style")
     assert r.status_code == 404
