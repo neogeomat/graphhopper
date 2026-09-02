@@ -1,9 +1,16 @@
-# Reproduction Guide
+# Reproduction Guide — GraphHopper landmark fork (engine)
 
-How to rebuild and run the **Rasuwa Flood — Dynamic Real-Time Road Update &
-Route Monitoring System** on a clean machine. The system is the GraphHopper
-landmark fork (Java) plus a FastAPI wrapper (Python) that adds incidents,
-per-request road blocking, Baato basemaps and the map dashboard.
+How to rebuild and run the engine of the **Rasuwa Flood — Dynamic Real-Time Road
+Update & Route Monitoring System** on a clean machine. This repo is the
+GraphHopper Java fork **only**.
+
+The system has three pieces, each in its own repo since the 2026-09-02 split:
+
+| Piece | Repo | Notes |
+|---|---|---|
+| Engine (this repo) | `neogeomat/graphhopper`, branch `rasuwa_flood_dyn_routing` | Java fork, unmodified upstream + landmark feature |
+| Wrapper | `incident-wrapper` (separate repo) | FastAPI sidecar: incidents, custom-model routing, Baato proxy, map dashboard. Own `Dockerfile` + `docker-compose.yml`; reaches the engine over HTTP via `GRAPHOPPER_URL`. Run/tests/env/auth/UI docs live in **its** README. |
+| Deployment glue + bundle | `rasuwa-flood-export` | Combined `docker-compose.yml` (both services on one network), `assemble.sh`, `start.sh`; produces the ship bundle |
 
 Two paths, both documented below:
 
@@ -15,14 +22,13 @@ Two paths, both documented below:
 ## 1. Architecture
 
 ```
-browser ──► wrapper :8000 (FastAPI) ──► graphhopper :8989 (unmodified Java fork)
+browser ──► wrapper :8000 (separate repo) ──► graphhopper :8989 (this repo)
 ```
 
-- The Java fork is **never modified**; all custom behaviour lives in the wrapper.
-- The browser talks only to `:8000` — the Baato API key never reaches it
-  (the wrapper proxies Baato server-side).
-- Data: `graph-cache/` (imported road graph) and
-  `incident-wrapper/data/incidents.db` (SQLite incident store).
+- The Java fork is **never modified**; all custom behaviour lives in the
+  wrapper (its own repo). The wrapper talks to this engine only over HTTP.
+- Data in this repo: `graph-cache/` (imported road graph) and the OSM PBF.
+  The incident store (`data/incidents.db`) lives in the wrapper repo.
 
 ---
 
@@ -32,28 +38,25 @@ browser ──► wrapper :8000 (FastAPI) ──► graphhopper :8989 (unmodifie
 |---|---|---|
 | JDK | 25+ | compile target `<release>25</release>` |
 | Maven | 3.9+ | multi-module build |
-| Python | 3.12 | wrapper only (not the Java build) |
 | Docker + compose | any recent | Path B, and running the stack |
-
-The wrapper's only Python dependencies are `fastapi`, `uvicorn`, `requests`
-(plus `pytest`/`httpx` for tests).
 
 ---
 
-## 3. Path A — build from source
+## 3. Path A — build the engine from source
 
 ### 3.1 Get the code
 
 ```bash
 git clone git@github.com:neogeomat/graphhopper.git
 cd graphhopper
-git checkout landmark_from_gh
+git checkout rasuwa_flood_dyn_routing
 ```
 
 `neogeomat` is the fork; `origin` (github.com/graphhopper/graphhopper) is
-upstream. All work lives on the `landmark_from_gh` branch.
+upstream — never push upstream. (`landmark_from_gh` is a legacy branch; all
+current work is on `rasuwa_flood_dyn_routing`.)
 
-### 3.2 Build the Java fork
+### 3.2 Build
 
 ```bash
 mvn clean install -DskipTests
@@ -149,55 +152,53 @@ camelCase Java property names.
 
 ### 3.6 The wrapper
 
-```bash
-cd incident-wrapper
-./run.sh                    # bootstraps .venv, installs deps, sources .env, runs uvicorn :8000
-```
-
-`run.sh` creates `.venv` and installs `requirements.txt` on first run, then
-sources `.env` and starts uvicorn. `.env` is gitignored — create it yourself from
-§3.7 before the first run.
-
-### 3.7 Environment (gitignored `incident-wrapper/.env`)
+The wrapper is **not in this repo** since the 2026-09-02 split. Get it from its
+own repository, then:
 
 ```bash
-BAATO_KEY=<your-key>          # required for the Baato Breeze basemap + geocoding
-GRAPHOPPER_URL=http://localhost:8989
-INCIDENTS_DB=<absolute-or-relative-path>/incidents.db   # default: data/incidents.db
-PORT=8000
-ADMIN_USERNAME=admin          # login for editing incidents
-ADMIN_PASSWORD=change-me      # change from the default 'admin'
+cd <wrapper repo>
+./run.sh        # bootstraps .venv, installs deps, sources .env, runs uvicorn :8000
 ```
 
-The wrapper falls back to Esri World Imagery (with a notice) when `BAATO_KEY`
-is absent, so the stack still runs without it.
-
-**Authentication**: editing incidents (create/update/delete) requires a login —
-`POST /login` returns a bearer token that the dashboard stores and sends as
-`Authorization: Bearer …`. Reads stay public. The credentials default to
-`admin`/`admin`; set a real `ADMIN_PASSWORD` (rotating it invalidates all
-tokens).
-
-### 3.8 Tests
-
-```bash
-cd incident-wrapper
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest        # 56 tests, ~0.5s
-```
-
-GraphHopper-dependent tests skip automatically when `GRAPHOPPER_URL` is
-unreachable, so the suite passes standalone.
+`.env` (gitignored) holds `BAATO_KEY`, `GRAPHOPPER_URL`
+(default `http://localhost:8989`), `INCIDENTS_DB`, `PORT`, and the
+`ADMIN_USERNAME`/`ADMIN_PASSWORD` login for editing incidents. Full
+run/tests/UI documentation: the wrapper repo's `README.md`.
 
 ---
 
-## 4. Path B — prebuilt bundle (no setup)
+## 4. Docker (from this repo)
+
+```bash
+docker compose up -d
+```
+
+One service (since the split):
+
+| Service | Image | Notes |
+|---|---|---|
+| `graphhopper` | `graphhopper-landmark:latest` | multi-stage Maven build, ~577 MB, 8989/8990 |
+
+Key details (each one earned in testing):
+
+- Bind-mounts `./graph-cache` (persists, no re-import) and the PBF read-only.
+- The healthcheck is `bash` + `/dev/tcp` because the JRE image has **no curl or
+  wget**; `start_period: 300s` covers the cold graph load.
+- The `wrapper` service used to live here too; it now has its own compose in
+  the wrapper repo (single service, `GRAPHOPPER_URL` default
+  `http://host.docker.internal:8989` — same Docker host). For both services on
+  **one** compose network (wrapper reaching the engine by service name), use
+  the combined deploy compose in `rasuwa-flood-export/docker-compose.yml`.
+
+---
+
+## 5. Path B — prebuilt bundle (whole system, no setup)
 
 The export bundle ships both docker images plus the imported graph, the PBF,
 the incident DB and the key — a fresh machine needs only Docker.
 
 ```bash
-tar -xzf rasuwa-flood-<date>.tar.gz
+tar -xzf rasuwa-flood-<version>-<date>.tar.gz
 ./start.sh          # docker load -i images.tar.gz && docker compose up -d
 ```
 
@@ -208,60 +209,22 @@ tar -xzf rasuwa-flood-<date>.tar.gz
 | GraphHopper admin | http://localhost:8990 |
 
 See the bundle's `README.md` for the data layout, persistence and the API-key
-handling note.
+handling note, and this repo §3 for rebuilding the engine image from source.
 
 ---
 
-## 5. Docker (from the repo)
+## 6. Verify the engine is up
 
 ```bash
-docker compose up -d
+docker compose ps                              # graphhopper (healthy)
+
+# Engine directly (this repo):
+curl "http://localhost:8989/route?point=27.7172,85.3240&point=27.7215,85.3310&profile=car"
+# → {"paths":[{...}]}
+
+# Whole system (engine + wrapper): the wrapper's /health shows the engine it is
+# wired to; the dashboard loads at http://localhost:8000 — see the wrapper repo.
 ```
-
-Two services:
-
-| Service | Image | Notes |
-|---|---|---|
-| `graphhopper` | `graphhopper-landmark:latest` | multi-stage Maven build, ~577 MB |
-| `wrapper` | `graphhopper-incident-wrapper:latest` | python:3.12-slim, :8000 |
-
-Key details (each one earned in testing):
-
-- The wrapper reaches the engine as `http://graphhopper:8989` (service name),
-  **not** `localhost`.
-- `BAATO_KEY` is injected at runtime via `env_file … required: false`; the
-  `.dockerignore` keeps `.env` out of the image.
-- The incident DB is a **directory** mount (`./incident-wrapper/data:/data`), not
-  a single file — Docker creates a single-file mount as a *directory* on a fresh
-  clone, and SQLite needs to write its journal beside the db.
-- `static/` is baked into the wrapper image, so a dashboard edit needs
-  `docker compose build wrapper && docker compose up -d wrapper` — not a refresh.
-- The `graphhopper` healthcheck is `bash` + `/dev/tcp` because the JRE image has
-  no `curl` or `wget`; `start_period: 300s` covers the cold graph load.
-
----
-
-## 6. Verify it is up
-
-```bash
-docker compose ps                              # both (healthy)
-
-curl http://localhost:8000/health
-# → {"status":"ok","upstream":"http://graphhopper:8989"}
-
-curl http://localhost:8000/config
-# → {"baato_configured":true}          # never the key itself
-
-curl "http://localhost:8000/route?point=27.7172,85.3240&point=27.7215,85.3310&profile=car"
-# → {"paths":[{"distance":…, "time":…}]}
-
-curl "http://localhost:8000/incidents"
-# → [] (or the pre-seeded closures in the bundle)
-```
-
-The dashboard should load at `http://localhost:8000` with the title
-**Rasuwa Flood — Dynamic Real-Time Road Update & Route Monitoring System**,
-Baato Breeze as the basemap, and 3D terrain.
 
 ---
 
@@ -273,11 +236,8 @@ Baato Breeze as the basemap, and 3D terrain.
   import. Delete `graph-cache/` and re-import.
 - **camelCase Dropwizard overrides fail** (`node with index not found`) — use the
   YAML snake_case keys.
-- **Blocking geometry** — an incident polygon must actually intersect the road.
-  A ±0.0016° box (~175 m) does *not* block; ±0.006° (~660 m) does.
-- **`queryRenderedFeatures` undercounts** under pitch/terrain — verify rendering
-  with a screenshot pixel/diff, not feature counts.
-- **Baato font 403s** on emoji/symbol glyph ranges are Baato's content gap,
-  keyless, and harmless.
 - **`pkill -f graphhopper-web-12.0-SNAPSHOT.jar`** also kills the launching shell —
   stop by PID instead.
+- Wrapper/dashboard gotchas (blocking-polygon geometry, `queryRenderedFeatures`
+  undercounts under terrain, Baato font 403s, terrain-before-setStyle crashes)
+  are documented in the wrapper repo's `README.md`/`AGENTS.md`.
